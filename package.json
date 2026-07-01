@@ -1,0 +1,16 @@
+{
+  "name": "gabriel-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Gabriel Desktop — the Application layer of the Gabriel Enterprise AI Operating System.",
+  "scripts": {
+    "dev": "pnpm --filter @gabriel/web dev",
+    "build": "pnpm --filter @gabriel/web build",
+    "lint": "pnpm --filter @gabriel/web lint",
+    "typecheck": "pnpm --filter @gabriel/web typecheck"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=20"
+  }
+}
