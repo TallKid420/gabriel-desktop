@@ -13,6 +13,16 @@ import { gatewayRequest, mockDelay, USE_MOCK } from './gateway-client';
 import { devPrincipals } from './mock/data';
 
 const SESSION_STORAGE_KEY = 'gabriel.session';
+const PRINCIPAL_TOKEN_STORAGE_KEY = 'gabriel.principalToken';
+
+function persistPrincipalToken(token: string | null): void {
+  if (typeof window === 'undefined') return;
+  if (token) {
+    window.localStorage.setItem(PRINCIPAL_TOKEN_STORAGE_KEY, token);
+    return;
+  }
+  window.localStorage.removeItem(PRINCIPAL_TOKEN_STORAGE_KEY);
+}
 
 /** List identities selectable in the Dev Identity Provider (dev only). */
 export async function listDevPrincipals(): Promise<DevPrincipalOption[]> {
@@ -53,12 +63,15 @@ export async function loginWithDevPrincipal(userId: string): Promise<Session> {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
     }
+    persistPrincipalToken(session.user.principal);
     return mockDelay(session, 200);
   }
-  return gatewayRequest<Session>('/auth/dev/login', {
+  const session = await gatewayRequest<Session>('/auth/dev/login', {
     method: 'POST',
     body: { userId },
   });
+  persistPrincipalToken(session.user.principal);
+  return session;
 }
 
 /** Read the current session, or null if unauthenticated. */
@@ -66,11 +79,16 @@ export async function getSession(): Promise<Session | null> {
   if (USE_MOCK) {
     if (typeof window === 'undefined') return null;
     const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Session) : null;
+    const session = raw ? (JSON.parse(raw) as Session) : null;
+    persistPrincipalToken(session?.user.principal ?? null);
+    return session;
   }
   try {
-    return await gatewayRequest<Session>('/auth/session');
+    const session = await gatewayRequest<Session>('/auth/session');
+    persistPrincipalToken(session.user.principal);
+    return session;
   } catch {
+    persistPrincipalToken(null);
     return null;
   }
 }
@@ -81,7 +99,9 @@ export async function logout(): Promise<void> {
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(SESSION_STORAGE_KEY);
     }
+    persistPrincipalToken(null);
     return;
   }
   await gatewayRequest<void>('/auth/logout', { method: 'POST' });
+  persistPrincipalToken(null);
 }

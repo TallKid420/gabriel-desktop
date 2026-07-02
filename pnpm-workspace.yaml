@@ -3,8 +3,8 @@ packages:
   - "packages/*"
 
 allowBuilds:
-  sharp: set this to true or false
-  unrs-resolver: set this to true or false
+  sharp: true
+  unrs-resolver: true
 
 # Native deps allowed to run install/build scripts (Next image optimizer +
 # the ESLint resolver). Everything else stays sandboxed.

@@ -20,6 +20,7 @@ export interface RequestOptions {
   body?: unknown;
   params?: Record<string, string | number | boolean | undefined>;
   signal?: AbortSignal;
+  headers?: HeadersInit;
   /** Multipart form data (document uploads). Overrides `body`. */
   form?: FormData;
 }
@@ -43,16 +44,37 @@ function buildUrl(path: string, params?: RequestOptions['params']): string {
   return url.toString();
 }
 
+function readPrincipalToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return window.localStorage.getItem('gabriel.principalToken');
+}
+
+function shouldAttachPrincipalToken(path: string): boolean {
+  return !path.startsWith('/auth/');
+}
+
 /** Perform a JSON request against the Gateway. Session travels via httpOnly cookie. */
 export async function gatewayRequest<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { method = 'GET', body, params, signal, form } = options;
+  const { method = 'GET', body, params, signal, form, headers } = options;
+
+  const requestHeaders = new Headers(headers);
+  if (!form && body !== undefined && !requestHeaders.has('Content-Type')) {
+    requestHeaders.set('Content-Type', 'application/json');
+  }
+
+  if (shouldAttachPrincipalToken(path)) {
+    const principalToken = readPrincipalToken();
+    if (principalToken && !requestHeaders.has('Authorization')) {
+      requestHeaders.set('Authorization', `Bearer ${principalToken}`);
+    }
+  }
 
   const response = await fetch(buildUrl(path, params), {
     method,
-    headers: form ? undefined : body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: requestHeaders,
     body: form ?? (body !== undefined ? JSON.stringify(body) : undefined),
     credentials: 'include',
     signal,
