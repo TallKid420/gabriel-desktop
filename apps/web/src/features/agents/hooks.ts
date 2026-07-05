@@ -3,9 +3,30 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { agents as agentsService } from '@/services';
 import type { AgentConfig } from '@/types';
+import type { CreateAgentInput } from '@/services/agents';
 
 export function useAgents() {
   return useQuery({ queryKey: ['agents'], queryFn: () => agentsService.listAgents() });
+}
+
+export function useCreateAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateAgentInput) => agentsService.createAgent(input),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['agents'] });
+    },
+  });
+}
+
+export function useDeleteAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => agentsService.deleteAgent(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['agents'] });
+    },
+  });
 }
 
 export function useAgent(id: string) {

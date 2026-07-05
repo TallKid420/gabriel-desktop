@@ -8,6 +8,7 @@
  */
 import type { ChatStreamChunk, Conversation, Message } from '@/types';
 import { gatewayRequest, mockDelay, USE_MOCK } from './gateway-client';
+import { getPrincipalToken } from './auth';
 import { getRealtimeTransport } from './realtime';
 import {
   conversations as mockConversations,
@@ -15,13 +16,19 @@ import {
 } from './mock/data';
 
 export async function listConversations(): Promise<Conversation[]> {
-  if (USE_MOCK) {
-    const sorted = [...mockConversations].sort((a, b) =>
-      b.updatedAt.localeCompare(a.updatedAt),
-    );
-    return mockDelay(sorted);
-  }
-  return gatewayRequest<Conversation[]>('/chat/conversations');
+  // if (USE_MOCK) {
+  //   const sorted = [...mockConversations].sort((a, b) =>
+  //     b.updatedAt.localeCompare(a.updatedAt),
+  //   );
+  //   return mockDelay(sorted);
+  // }
+  const principalToken = await getPrincipalToken();
+  return gatewayRequest<Conversation[]>('/chat/conversations', {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${principalToken}`,
+    },
+  });
 }
 
 export async function getConversation(id: string): Promise<Conversation | null> {

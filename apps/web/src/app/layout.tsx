@@ -29,7 +29,10 @@ export default function RootLayout({
     // `dark` is the default theme; ThemeSync reconciles with the persisted
     // preference on mount. suppressHydrationWarning avoids a flash mismatch.
     <html lang="en" className="dark" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        suppressHydrationWarning
+      >
         <AppProviders>{children}</AppProviders>
         <Toaster position="bottom-right" />
       </body>

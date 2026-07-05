@@ -38,6 +38,11 @@ export function LoginView() {
     queryFn: () => auth.listDevPrincipals(),
   });
 
+  const safePrincipals = (principals ?? []).filter(
+    (option): option is DevPrincipalOption =>
+      Boolean(option?.user?.id && option?.organization?.id),
+  );
+
   const signIn = async (option: DevPrincipalOption) => {
     setPendingId(option.user.id);
     try {
@@ -80,7 +85,7 @@ export function LoginView() {
           )}
 
           <ul className="flex flex-col gap-2">
-            {principals?.map((p) => {
+            {safePrincipals.map((p) => {
               const busy = pendingId === p.user.id;
               return (
                 <li key={p.user.id}>

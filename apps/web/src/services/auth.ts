@@ -9,7 +9,7 @@
  * changes when USE_MOCK flips to false.
  */
 import type { DevPrincipalOption, Session } from '@/types';
-import { gatewayRequest, mockDelay, USE_MOCK } from './gateway-client';
+import { gatewayRequest, isMock, mockDelay } from './gateway-client';
 import { devPrincipals } from './mock/data';
 
 const SESSION_STORAGE_KEY = 'gabriel.session';
@@ -26,8 +26,9 @@ function persistPrincipalToken(token: string | null): void {
 
 /** List identities selectable in the Dev Identity Provider (dev only). */
 export async function listDevPrincipals(): Promise<DevPrincipalOption[]> {
-  if (USE_MOCK) return mockDelay(devPrincipals, 120);
-  return gatewayRequest<DevPrincipalOption[]>('/auth/dev/principals');
+  const principals = await gatewayRequest<DevPrincipalOption[]>('/auth/dev/principals');
+  console.log('[auth] dev principals', principals);
+  return principals;
 }
 
 /** Build a Session view from a selected dev principal. */
@@ -56,16 +57,6 @@ function sessionFromPrincipal(option: DevPrincipalOption): Session {
  * In M0 we resolve the chosen dev principal and persist a session view locally.
  */
 export async function loginWithDevPrincipal(userId: string): Promise<Session> {
-  if (USE_MOCK) {
-    const option = devPrincipals.find((p) => p.user.id === userId);
-    if (!option) throw new Error(`Unknown dev principal: ${userId}`);
-    const session = sessionFromPrincipal(option);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-    }
-    persistPrincipalToken(session.user.principal);
-    return mockDelay(session, 200);
-  }
   const session = await gatewayRequest<Session>('/auth/dev/login', {
     method: 'POST',
     body: { userId },
@@ -74,15 +65,20 @@ export async function loginWithDevPrincipal(userId: string): Promise<Session> {
   return session;
 }
 
+export async function getPrincipalToken(): Promise<string | null> {
+  const token = window.localStorage.getItem(PRINCIPAL_TOKEN_STORAGE_KEY);
+  return token;
+}
+
 /** Read the current session, or null if unauthenticated. */
 export async function getSession(): Promise<Session | null> {
-  if (USE_MOCK) {
-    if (typeof window === 'undefined') return null;
-    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    const session = raw ? (JSON.parse(raw) as Session) : null;
-    persistPrincipalToken(session?.user.principal ?? null);
-    return session;
-  }
+  // if (isMock('auth')) {
+  //   if (typeof window === 'undefined') return null;
+  //   const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+  //   const session = raw ? (JSON.parse(raw) as Session) : null;
+  //   persistPrincipalToken(session?.user.principal ?? null);
+  //   return session;
+  // }
   try {
     const session = await gatewayRequest<Session>('/auth/session');
     persistPrincipalToken(session.user.principal);
@@ -95,13 +91,13 @@ export async function getSession(): Promise<Session | null> {
 
 /** End the session. Clears the cookie server-side in prod. */
 export async function logout(): Promise<void> {
-  if (USE_MOCK) {
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
-    }
-    persistPrincipalToken(null);
-    return;
-  }
+  // if (isMock('auth')) {
+  //   if (typeof window !== 'undefined') {
+  //     window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  //   }
+  //   persistPrincipalToken(null);
+  //   return;
+  // }
   await gatewayRequest<void>('/auth/logout', { method: 'POST' });
   persistPrincipalToken(null);
 }

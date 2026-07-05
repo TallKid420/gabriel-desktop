@@ -9,11 +9,28 @@
  */
 
 export const GATEWAY_URL =
-  process.env.NEXT_PUBLIC_GATEWAY_URL ?? 'http://localhost:8080';
+  process.env.NEXT_PUBLIC_GATEWAY_URL ?? 'http://localhost:8000';
 
 /** M0 flag: serve from mock providers until the Gateway exists (M2). */
 export const USE_MOCK =
   (process.env.NEXT_PUBLIC_USE_MOCK ?? 'true').toLowerCase() !== 'false';
+
+/**
+ * The Gateway is the BFF that fronts the Identity Service (ADR-007). The browser never mints or inspects primary tokens.
+ */
+
+export type LiveDomain = 'auth';
+
+const LIVE_DOMAINS: Record<LiveDomain, boolean> = {
+  auth: (process.env.NEXT_PUBLIC_LIVE_AUTH ?? 'false').toLowerCase() === 'true',
+};
+
+/** True when the given domain should still use mock providers. */
+export function isMock(domain: LiveDomain): boolean {
+  // A global mock override (USE_MOCK=false) also switches everything live.
+  if (!USE_MOCK) return false;
+  return !LIVE_DOMAINS[domain];
+}
 
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -53,6 +70,46 @@ function shouldAttachPrincipalToken(path: string): boolean {
   return !path.startsWith('/auth/');
 }
 
+function parseJsonBody(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function getGatewayErrorInfo(data: unknown): {
+  hasError: boolean;
+  detail?: string;
+  requestId?: string;
+} {
+  if (!data || typeof data !== 'object') {
+    return { hasError: false };
+  }
+
+  const payload = data as Record<string, unknown>;
+  const hasError =
+    payload.error !== undefined ||
+    payload.errors !== undefined ||
+    payload.ok === false ||
+    payload.success === false ||
+    payload.status === 'error';
+
+  if (!hasError) {
+    return { hasError: false };
+  }
+
+  const detail =
+    (typeof payload.detail === 'string' ? payload.detail : undefined) ??
+    (typeof payload.message === 'string' ? payload.message : undefined) ??
+    (typeof payload.error === 'string' ? payload.error : undefined);
+
+  const requestId =
+    typeof payload.request_id === 'string' ? payload.request_id : undefined;
+
+  return { hasError: true, detail, requestId };
+}
+
 /** Perform a JSON request against the Gateway. Session travels via httpOnly cookie. */
 export async function gatewayRequest<T>(
   path: string,
@@ -80,22 +137,26 @@ export async function gatewayRequest<T>(
     signal,
   });
 
+  const text = response.status === 204 ? '' : await response.text();
+  const data = text ? parseJsonBody(text) : undefined;
+
   if (!response.ok) {
     let detail = response.statusText;
     let requestId: string | undefined;
-    try {
-      const data = await response.json();
-      detail = data.detail ?? data.message ?? detail;
-      requestId = data.request_id;
-    } catch {
-      /* non-JSON error body */
-    }
+    const errorInfo = getGatewayErrorInfo(data);
+    if (errorInfo.detail) detail = errorInfo.detail;
+    requestId = errorInfo.requestId;
     throw new GatewayError(detail, response.status, requestId);
   }
 
   if (response.status === 204) return undefined as T;
-  const text = await response.text();
-  return (text ? JSON.parse(text) : undefined) as T;
+
+  const errorInfo = getGatewayErrorInfo(data);
+  if (errorInfo.hasError) {
+    throw new GatewayError(errorInfo.detail ?? 'Gateway returned an error payload', response.status, errorInfo.requestId);
+  }
+
+  return data as T;
 }
 
 /** Small helper to simulate latency for mock providers. */
