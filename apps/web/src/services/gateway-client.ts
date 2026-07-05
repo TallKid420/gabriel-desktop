@@ -15,6 +15,27 @@ export const GATEWAY_URL =
 export const USE_MOCK =
   (process.env.NEXT_PUBLIC_USE_MOCK ?? 'true').toLowerCase() !== 'false';
 
+/**
+ * Domains that have a live Gateway/backend and should bypass the mock.
+ *
+ * Milestones migrate one domain at a time: a single global `USE_MOCK` would
+ * force every un-migrated domain (chat, agents, documents…) to hit endpoints
+ * that don't exist yet. `isMock(domain)` lets M1 flip *auth* to live while the
+ * rest keep serving mock data. Enable a domain by setting its env flag to true.
+ */
+export type LiveDomain = 'auth';
+
+const LIVE_DOMAINS: Record<LiveDomain, boolean> = {
+  auth: (process.env.NEXT_PUBLIC_LIVE_AUTH ?? 'false').toLowerCase() === 'true',
+};
+
+/** True when the given domain should still use mock providers. */
+export function isMock(domain: LiveDomain): boolean {
+  // A global mock override (USE_MOCK=false) also switches everything live.
+  if (!USE_MOCK) return false;
+  return !LIVE_DOMAINS[domain];
+}
+
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;

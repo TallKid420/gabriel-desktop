@@ -9,14 +9,14 @@
  * changes when USE_MOCK flips to false.
  */
 import type { DevPrincipalOption, Session } from '@/types';
-import { gatewayRequest, mockDelay, USE_MOCK } from './gateway-client';
+import { gatewayRequest, isMock, mockDelay } from './gateway-client';
 import { devPrincipals } from './mock/data';
 
 const SESSION_STORAGE_KEY = 'gabriel.session';
 
 /** List identities selectable in the Dev Identity Provider (dev only). */
 export async function listDevPrincipals(): Promise<DevPrincipalOption[]> {
-  if (USE_MOCK) return mockDelay(devPrincipals, 120);
+  if (isMock('auth')) return mockDelay(devPrincipals, 120);
   return gatewayRequest<DevPrincipalOption[]>('/auth/dev/principals');
 }
 
@@ -46,7 +46,7 @@ function sessionFromPrincipal(option: DevPrincipalOption): Session {
  * In M0 we resolve the chosen dev principal and persist a session view locally.
  */
 export async function loginWithDevPrincipal(userId: string): Promise<Session> {
-  if (USE_MOCK) {
+  if (isMock('auth')) {
     const option = devPrincipals.find((p) => p.user.id === userId);
     if (!option) throw new Error(`Unknown dev principal: ${userId}`);
     const session = sessionFromPrincipal(option);
@@ -63,7 +63,7 @@ export async function loginWithDevPrincipal(userId: string): Promise<Session> {
 
 /** Read the current session, or null if unauthenticated. */
 export async function getSession(): Promise<Session | null> {
-  if (USE_MOCK) {
+  if (isMock('auth')) {
     if (typeof window === 'undefined') return null;
     const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
     return raw ? (JSON.parse(raw) as Session) : null;
@@ -77,7 +77,7 @@ export async function getSession(): Promise<Session | null> {
 
 /** End the session. Clears the cookie server-side in prod. */
 export async function logout(): Promise<void> {
-  if (USE_MOCK) {
+  if (isMock('auth')) {
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(SESSION_STORAGE_KEY);
     }
