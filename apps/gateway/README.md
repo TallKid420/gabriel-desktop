@@ -46,10 +46,45 @@ to the Identity Service and manages the httpOnly session cookie.
 | `SESSION_COOKIE_SAMESITE` | `lax` | |
 | `SESSION_TTL_SECONDS` | `28800` (8h) | Cookie lifetime |
 
+## Agent specifications (Phase 4 — core seam)
+
+The Gateway exposes gabriel-core's migrated **agent specification system** to
+the browser. This is the wiring point between `gabriel-desktop` and
+`gabriel-core`: the Gateway imports `gabriel.agent` and drives it via
+`gabriel_gateway.core_specs.CoreSpecService` — it re-implements **no** agent
+modelling (consistent with the "no business logic" rule above).
+
+```
+Browser → Gateway → gabriel.agent (templates, GRN tool bindings, spec store)
+```
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/agent-specs/templates` | List migrated template descriptors (chat/engineer/researcher/daemon/server) |
+| POST | `/agent-specs/instantiate` | Build a spec from a template + overrides (validated) |
+| GET | `/agent-specs` | List persisted spec names |
+| POST | `/agent-specs` | Build **and persist** a spec |
+| GET | `/agent-specs/{name}` | Load a persisted spec |
+| DELETE | `/agent-specs/{name}` | Delete a persisted spec |
+
+Responses include `resolvedTools` — the spec's wildcard tool GRNs resolved to
+concrete org-scoped GRNs (`grn:<org>:tool/<name>:<version>`).
+
+Additional configuration (`GABRIEL_GATEWAY_` prefix):
+
+| Setting | Default | Notes |
+| --- | --- | --- |
+| `AGENT_SPECS_DIR` | `.gabriel/agent-specs` | Backing dir for the spec store |
+| `DEFAULT_ORG_ID` | `acme` | Org used to resolve wildcard tool GRNs |
+
+See `gabriel-core/docs/agent-specification-system.md` for the full design.
+
 ## Run
 
 ```bash
+# gabriel-core provides the agent specification system:
+pip install -e ../../gabriel-core
 pip install -e ".[dev]"
 uvicorn gabriel_gateway.main:app --port 8080 --app-dir src
-python -m pytest        # 10 tests
+PYTHONPATH=src python -m pytest        # agent-spec seam + HTTP API tests
 ```
