@@ -1,7 +1,10 @@
 """End-to-end HTTP tests for the Gateway agent-specification API.
 
-Uses FastAPI's TestClient against an app wired to a temp-backed
-CoreSpecService, proving the browser-facing seam works over HTTP.
+Two HTTP hops are exercised here:
+  browser -> Gateway (TestClient)  ->  gabriel-core (httpx ASGI transport)
+
+The Gateway holds no agent logic; it forwards to gabriel-core over HTTP and
+relays the JSON responses (which already include resolved GRNs).
 """
 
 from __future__ import annotations
@@ -9,13 +12,13 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from gabriel_gateway.core_specs import CoreSpecService
+from gabriel_gateway.core_specs import CoreSpecClient
 from gabriel_gateway.main import create_app
 
 
 @pytest.fixture()
-def client(service: CoreSpecService) -> TestClient:
-    app = create_app(spec_service=service)
+def client(spec_client: CoreSpecClient) -> TestClient:
+    app = create_app(spec_client=spec_client)
     return TestClient(app)
 
 
@@ -28,9 +31,8 @@ def test_health(client: TestClient) -> None:
 def test_list_templates(client: TestClient) -> None:
     resp = client.get("/agent-specs/templates")
     assert resp.status_code == 200
-    templates = resp.json()["templates"]
-    keys = {t["key"] for t in templates}
-    assert keys == {"chat", "engineer", "researcher", "daemon", "server"}
+    keys = {t["key"] for t in resp.json()["templates"]}
+    assert {"chat", "engineer", "researcher", "daemon", "server"} <= keys
 
 
 def test_instantiate_endpoint(client: TestClient) -> None:
@@ -42,7 +44,7 @@ def test_instantiate_endpoint(client: TestClient) -> None:
     body = resp.json()
     assert body["name"] == "helpdesk"
     assert body["model"] == "gpt-oss:120b"
-    # Resolved GRNs are surfaced to the browser.
+    # Resolved GRNs (produced by gabriel-core) are surfaced to the browser.
     assert body["resolvedTools"]
     assert all(g.startswith("grn:acme:tool/") for g in body["resolvedTools"])
 
@@ -57,10 +59,7 @@ def test_save_list_load_delete_flow(client: TestClient) -> None:
     assert client.get("/agent-specs").json()["specs"] == []
 
     # Persist.
-    resp = client.post(
-        "/agent-specs",
-        json={"template": "engineer", "name": "builder"},
-    )
+    resp = client.post("/agent-specs", json={"template": "engineer", "name": "builder"})
     assert resp.status_code == 201
     assert resp.json()["path"].endswith(".json")
 

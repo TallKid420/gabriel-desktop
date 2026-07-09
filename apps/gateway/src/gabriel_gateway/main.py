@@ -1,6 +1,9 @@
 """Gabriel Gateway FastAPI application (agent-specification seam).
 
-Exposes gabriel-core's migrated agent specification system to the browser:
+Exposes gabriel-core's migrated agent specification system to the browser by
+**calling gabriel-core over HTTP** — the Gateway does not import or install
+gabriel-core (Phase 4 wiring rule). Every operation is forwarded to
+gabriel-core via :class:`gabriel_gateway.core_specs.CoreSpecClient`.
 
     GET    /health                       liveness
     GET    /agent-specs/templates        list migrated template descriptors
@@ -9,9 +12,6 @@ Exposes gabriel-core's migrated agent specification system to the browser:
     POST   /agent-specs                  persist a spec (from a template)
     GET    /agent-specs/{name}           load a persisted spec
     DELETE /agent-specs/{name}           delete a persisted spec
-
-The Gateway holds no agent business logic — every operation delegates to
-gabriel-core via :class:`gabriel_gateway.core_specs.CoreSpecService`.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from gabriel_gateway.core_specs import CoreSpecService, SpecificationNotFoundError
+from gabriel_gateway.core_specs import CoreSpecClient, CoreServiceError
 from gabriel_gateway.settings import get_settings
 
 
@@ -39,30 +39,31 @@ class InstantiateRequest(BaseModel):
 
     model_config = {"populate_by_name": True}
 
-    def to_overrides(self) -> dict[str, Any]:
-        overrides: dict[str, Any] = {}
-        for key in ("name", "model", "provider", "metadata"):
-            value = getattr(self, key)
+    def to_payload(self) -> dict[str, Any]:
+        """Build the JSON body forwarded to gabriel-core (camelCase aliases)."""
+        payload: dict[str, Any] = {"template": self.template}
+        for attr, key in (
+            ("name", "name"),
+            ("model", "model"),
+            ("provider", "provider"),
+            ("metadata", "metadata"),
+            ("system_prompt", "systemPrompt"),
+            ("extra_tools", "extraTools"),
+        ):
+            value = getattr(self, attr)
             if value is not None:
-                overrides[key] = value
-        if self.system_prompt is not None:
-            overrides["system_prompt"] = self.system_prompt
-        if self.extra_tools is not None:
-            overrides["extra_tools"] = self.extra_tools
-        return overrides
+                payload[key] = value
+        return payload
 
 
 class SaveRequest(InstantiateRequest):
     """Build-and-persist request (same shape as instantiate)."""
 
 
-def create_app(spec_service: CoreSpecService | None = None) -> FastAPI:
-    """Application factory. Pass *spec_service* to inject a custom instance."""
+def create_app(spec_client: CoreSpecClient | None = None) -> FastAPI:
+    """Application factory. Pass *spec_client* to inject a custom client."""
     settings = get_settings()
-    service = spec_service or CoreSpecService(
-        specs_dir=settings.agent_specs_dir,
-        org_id=settings.default_org_id,
-    )
+    client = spec_client or CoreSpecClient(base_url=settings.core_base_url)
 
     app = FastAPI(title="Gabriel Gateway", version="0.2.0")
     app.add_middleware(
@@ -72,13 +73,14 @@ def create_app(spec_service: CoreSpecService | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.state.spec_service = service
+    app.state.spec_client = client
 
-    def _spec_payload(spec) -> dict[str, Any]:
-        """Serialize a spec for the browser, adding resolved tool GRNs."""
-        data = spec.model_dump(mode="json")
-        data["resolvedTools"] = service.resolve_tool_grns(spec)
-        return data
+    def _relay(fn):
+        """Run a client call, mapping CoreServiceError to HTTPException."""
+        try:
+            return fn()
+        except CoreServiceError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -86,49 +88,27 @@ def create_app(spec_service: CoreSpecService | None = None) -> FastAPI:
 
     @app.get("/agent-specs/templates")
     async def templates() -> dict[str, Any]:
-        return {"templates": service.describe_templates()}
+        return {"templates": _relay(client.describe_templates)}
 
     @app.post("/agent-specs/instantiate")
     async def instantiate(req: InstantiateRequest) -> dict[str, Any]:
-        try:
-            spec = service.instantiate(req.template, **req.to_overrides())
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:  # validation errors etc.
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return _spec_payload(spec)
+        return _relay(lambda: client.instantiate(req.to_payload()))
 
     @app.get("/agent-specs")
     async def list_specs() -> dict[str, list[str]]:
-        return {"specs": service.list_saved()}
+        return {"specs": _relay(client.list_saved)}
 
     @app.post("/agent-specs", status_code=201)
     async def save_spec(req: SaveRequest) -> dict[str, Any]:
-        try:
-            spec = service.instantiate(req.template, **req.to_overrides())
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        path = service.save(spec)
-        payload = _spec_payload(spec)
-        payload["path"] = path
-        return payload
+        return _relay(lambda: client.save(req.to_payload()))
 
     @app.get("/agent-specs/{name}")
     async def load_spec(name: str) -> dict[str, Any]:
-        try:
-            spec = service.load(name)
-        except SpecificationNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return _spec_payload(spec)
+        return _relay(lambda: client.load(name))
 
     @app.delete("/agent-specs/{name}", status_code=204)
     async def delete_spec(name: str) -> None:
-        try:
-            service.delete(name)
-        except SpecificationNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _relay(lambda: client.delete(name))
 
     return app
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
 _PREFIX = "GABRIEL_GATEWAY_"
 
@@ -19,11 +18,11 @@ class Settings:
 
     environment: str = "development"
     web_origin: str = "http://localhost:3000"
-    # Directory where authored/migrated agent specifications live. This is the
-    # migration analogue of the legacy config/agents.yaml.
-    agent_specs_dir: str = ".gabriel/agent-specs"
-    # Default organization used when resolving template tool bindings to GRNs.
-    default_org_id: str = "acme"
+    # Base URL of the gabriel-core service. The Gateway calls gabriel-core's
+    # agent-specification API over HTTP (it does NOT import gabriel-core). The
+    # agent-spec store and org resolution are owned by gabriel-core, configured
+    # there via GABRIEL_AGENT_SPECS_DIR / GABRIEL_DEFAULT_ORG_ID.
+    core_base_url: str = "http://localhost:8000"
 
 
 def get_settings() -> Settings:
@@ -31,8 +30,5 @@ def get_settings() -> Settings:
     return Settings(
         environment=_env("ENVIRONMENT", "development"),
         web_origin=_env("WEB_ORIGIN", "http://localhost:3000"),
-        agent_specs_dir=_env(
-            "AGENT_SPECS_DIR", str(Path.cwd() / ".gabriel" / "agent-specs")
-        ),
-        default_org_id=_env("DEFAULT_ORG_ID", "acme"),
+        core_base_url=_env("CORE_BASE_URL", "http://localhost:8000"),
     )

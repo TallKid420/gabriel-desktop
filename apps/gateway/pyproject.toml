@@ -13,11 +13,10 @@ dependencies = [
     "uvicorn[standard]>=0.32,<0.33",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.6,<3",
+    # httpx is the transport the Gateway uses to call gabriel-core's HTTP API.
+    # The Gateway deliberately does NOT depend on gabriel-core as a package —
+    # the two services are wired together purely over HTTP (Phase 4 rule).
     "httpx>=0.27,<0.28",
-    # gabriel-core provides the declarative agent specification system that the
-    # Gateway exposes to the browser. Installed editable from the sibling repo
-    # during local dev:  pip install -e ../../gabriel-core
-    "gabriel-core",
 ]
 
 [project.optional-dependencies]
@@ -26,10 +25,6 @@ dev = [
     "pytest-asyncio>=0.24,<0.25",
     "asgi-lifespan>=2.1,<3",
 ]
-
-# During local development gabriel-core is resolved from the sibling checkout.
-# (PEP 508 direct references are avoided so the package remains publishable.)
-# Editable install:  pip install -e ../../gabriel-core
 
 [tool.setuptools.packages.find]
 where = ["src"]

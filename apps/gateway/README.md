@@ -50,12 +50,15 @@ to the Identity Service and manages the httpOnly session cookie.
 
 The Gateway exposes gabriel-core's migrated **agent specification system** to
 the browser. This is the wiring point between `gabriel-desktop` and
-`gabriel-core`: the Gateway imports `gabriel.agent` and drives it via
-`gabriel_gateway.core_specs.CoreSpecService` — it re-implements **no** agent
-modelling (consistent with the "no business logic" rule above).
+`gabriel-core`, and it is done **purely over HTTP**: the Gateway calls
+gabriel-core's `/api/v1/agent-specs` API via an `httpx` client
+(`gabriel_gateway.core_specs.CoreSpecClient`). The Gateway **does not import or
+install `gabriel-core`** and re-implements **no** agent modelling (consistent
+with the "no business logic" rule above).
 
 ```
-Browser → Gateway → gabriel.agent (templates, GRN tool bindings, spec store)
+Browser → Gateway (CoreSpecClient / httpx) → gabriel-core HTTP API
+                                              /api/v1/agent-specs
 ```
 
 | Method | Path | Purpose |
@@ -74,17 +77,28 @@ Additional configuration (`GABRIEL_GATEWAY_` prefix):
 
 | Setting | Default | Notes |
 | --- | --- | --- |
-| `AGENT_SPECS_DIR` | `.gabriel/agent-specs` | Backing dir for the spec store |
-| `DEFAULT_ORG_ID` | `acme` | Org used to resolve wildcard tool GRNs |
+| `CORE_BASE_URL` | `http://localhost:8000` | Base URL of the gabriel-core service |
+
+The spec store location and org (`GABRIEL_AGENT_SPECS_DIR`,
+`GABRIEL_DEFAULT_ORG_ID`) are owned and configured by **gabriel-core**, not the
+Gateway.
 
 See `gabriel-core/docs/agent-specification-system.md` for the full design.
 
 ## Run
 
+The Gateway and gabriel-core are **separate services** wired over HTTP. Start
+gabriel-core first, then point the Gateway at it:
+
 ```bash
-# gabriel-core provides the agent specification system:
-pip install -e ../../gabriel-core
+# terminal 1 — gabriel-core (separate repo/checkout)
+cd ../../gabriel-core
+GABRIEL_AGENT_SPECS_DIR=.gabriel/agent-specs \
+  uvicorn gabriel.api.app:app --port 8000
+
+# terminal 2 — the Gateway (this app; no gabriel-core install)
 pip install -e ".[dev]"
-uvicorn gabriel_gateway.main:app --port 8080 --app-dir src
-PYTHONPATH=src python -m pytest        # agent-spec seam + HTTP API tests
+GABRIEL_GATEWAY_CORE_BASE_URL=http://localhost:8000 \
+  uvicorn gabriel_gateway.main:app --port 8080 --app-dir src
+PYTHONPATH=src python -m pytest        # HTTP seam + gateway API tests
 ```

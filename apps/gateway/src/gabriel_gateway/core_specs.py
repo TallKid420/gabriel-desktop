@@ -1,21 +1,14 @@
-"""Core agent-specification seam for the Gateway.
+"""HTTP client seam wiring **gabriel-desktop** to **gabriel-core**.
 
-This is the integration point that wires **gabriel-desktop** to **gabriel-core**.
-The desktop app never re-implements agent modelling: it imports gabriel-core's
-declarative agent system and drives it.
+Phase 4 wiring rule: the desktop gateway is a Backend-For-Frontend and must
+**not** import or install ``gabriel-core``. All agent-specification logic lives
+in gabriel-core and is consumed here purely over HTTP (gabriel-core exposes it
+under ``/api/v1/agent-specs``).
 
-Responsibilities
-----------------
-* Expose the migrated template library (chat/engineer/researcher/daemon/server).
-* Instantiate a template into a concrete :class:`AgentSpecification`, applying
-  browser-supplied overrides (name, model, system prompt, …).
-* Resolve wildcard tool GRNs to concrete, org-scoped tool GRNs.
-* Validate a specification against the template vocabulary.
-* Persist / load specifications through gabriel-core's
-  :class:`AgentSpecificationStore` (the shared authoring format).
-
-Everything below delegates to gabriel-core; there is deliberately no agent
-business logic in the Gateway (ADR: BFF holds no business logic).
+This module provides :class:`CoreSpecClient`, a thin ``httpx`` client that the
+Gateway's FastAPI layer delegates to. It performs no agent modelling itself —
+it forwards requests to gabriel-core and relays the JSON responses (which
+already include validated specs and resolved GRN tool bindings).
 """
 
 from __future__ import annotations
@@ -23,115 +16,137 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-# --- gabriel-core imports (the wiring) -------------------------------------
-from gabriel.agent import (
-    AgentSpecification,
-    AgentSpecificationStore,
-    AgentValidator,
-    build_specification,
-    get_template,
-    list_templates,
-    template_vocabulary,
-)
-from gabriel.agent.store import SpecificationNotFoundError
+import httpx
 
 __all__ = [
+    "CoreSpecClient",
     "CoreSpecService",
+    "CoreServiceError",
     "SpecificationNotFoundError",
 ]
 
 
-@dataclass
-class CoreSpecService:
-    """Facade the Gateway uses to talk to gabriel-core's spec system.
+class CoreServiceError(RuntimeError):
+    """Raised when gabriel-core returns an error we should surface upstream.
 
-    Args:
-        specs_dir: Directory backing the :class:`AgentSpecificationStore`.
-        org_id: Organization used to resolve wildcard tool bindings to GRNs.
+    Carries the HTTP ``status_code`` and ``detail`` so the Gateway API can map
+    it back onto an equivalent HTTP response for the browser.
     """
 
-    specs_dir: str
-    org_id: str = "acme"
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+class SpecificationNotFoundError(CoreServiceError):
+    """A named specification does not exist in gabriel-core's store."""
+
+    def __init__(self, detail: str = "Specification not found") -> None:
+        super().__init__(404, detail)
+
+
+@dataclass
+class CoreSpecClient:
+    """HTTP client the Gateway uses to talk to gabriel-core's spec API.
+
+    Args:
+        base_url: Base URL of the gabriel-core service (e.g.
+            ``http://localhost:8000``). The client targets ``/api/v1/agent-specs``.
+        timeout: Per-request timeout in seconds.
+        client: Optional pre-built ``httpx.Client`` (mainly for testing, e.g.
+            wrapping an ASGI transport so no real socket is used).
+    """
+
+    base_url: str = "http://localhost:8000"
+    timeout: float = 10.0
+    client: httpx.Client | None = None
 
     def __post_init__(self) -> None:
-        self._store = AgentSpecificationStore(self.specs_dir)
-        vocab = template_vocabulary()
-        self._validator = AgentValidator(
-            runtimes=vocab["runtimes"],
-            tools=vocab["tools"],
-            capabilities=vocab["capabilities"],
-            memory_layers=vocab["memory_layers"],
-            models=vocab["models"],
+        self._prefix = "/api/v1/agent-specs"
+        self._owns_client = self.client is None
+        self._client = self.client or httpx.Client(
+            base_url=self.base_url.rstrip("/"), timeout=self.timeout
         )
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
+
+    def __enter__(self) -> "CoreSpecClient":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    # ------------------------------------------------------------------
+    # Internal request helper
+    # ------------------------------------------------------------------
+    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        try:
+            resp = self._client.request(method, f"{self._prefix}{path}", **kwargs)
+        except httpx.HTTPError as exc:  # network/connection failures
+            raise CoreServiceError(502, f"gabriel-core unreachable: {exc}") from exc
+
+        if resp.status_code >= 400:
+            detail = _extract_detail(resp)
+            if resp.status_code == 404:
+                raise SpecificationNotFoundError(detail)
+            raise CoreServiceError(resp.status_code, detail)
+        return resp
 
     # ------------------------------------------------------------------
     # Templates
     # ------------------------------------------------------------------
-    def list_template_keys(self) -> list[str]:
-        """Return the available template keys (legacy agent types)."""
-        return list_templates()
-
     def describe_templates(self) -> list[dict[str, Any]]:
-        """Return browser-friendly descriptors for every template."""
-        descriptors: list[dict[str, Any]] = []
-        for key in list_templates():
-            template = get_template(key)
-            spec = template.build()
-            descriptors.append(
-                {
-                    "key": template.key,
-                    "legacyClass": template.legacy_class,
-                    "name": spec.name,
-                    "description": spec.description,
-                    "model": spec.model,
-                    "provider": spec.provider,
-                    "runtime": spec.runtime,
-                    "capabilities": spec.capabilities,
-                    "tools": spec.tools,
-                    "memoryLayers": spec.memory_layers,
-                    "triggers": [t.event_type for t in spec.normalized_triggers()],
-                }
-            )
-        return descriptors
+        """Return template descriptors from gabriel-core."""
+        resp = self._request("GET", "/templates")
+        return resp.json()["templates"]
 
     # ------------------------------------------------------------------
-    # Instantiate + validate
+    # Instantiate
     # ------------------------------------------------------------------
-    def instantiate(self, template_key: str, **overrides: Any) -> AgentSpecification:
-        """Build a concrete specification from a template + overrides, validated."""
-        spec = build_specification(template_key, **overrides)
-        # Validator checks tool *names* rather than GRN bindings.
-        self._validator.validate(spec.model_copy(update={"tools": spec.tool_names()}))
-        return spec
-
-    def resolve_tool_grns(self, spec: AgentSpecification, version: int = 1) -> list[str]:
-        """Resolve a spec's (wildcard) tool bindings to concrete org-scoped GRNs."""
-        return spec.resolved_tools(self.org_id, version)
+    def instantiate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Build a spec (with resolved GRNs) from a template + overrides."""
+        resp = self._request("POST", "/instantiate", json=payload)
+        return resp.json()
 
     # ------------------------------------------------------------------
-    # Persistence (delegated to gabriel-core's store)
+    # Persistence
     # ------------------------------------------------------------------
-    def save(self, spec: AgentSpecification, *, name: str | None = None) -> str:
-        """Persist *spec*; return the on-disk path as a string."""
-        return str(self._store.save(spec, name=name))
-
-    def load(self, name: str) -> AgentSpecification:
-        """Load a persisted specification by name."""
-        return self._store.load(name)
+    def save(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Build + persist a spec in gabriel-core; return the spec payload."""
+        resp = self._request("POST", "", json=payload)
+        return resp.json()
 
     def list_saved(self) -> list[str]:
         """List persisted specification names."""
-        return self._store.list()
+        resp = self._request("GET", "")
+        return resp.json()["specs"]
+
+    def load(self, name: str) -> dict[str, Any]:
+        """Load a persisted specification by name."""
+        resp = self._request("GET", f"/{name}")
+        return resp.json()
 
     def delete(self, name: str) -> None:
         """Delete a persisted specification."""
-        self._store.delete(name)
+        self._request("DELETE", f"/{name}")
 
-    def seed_templates(self) -> list[str]:
-        """Persist every template spec into the store; return names written."""
-        names: list[str] = []
-        for key in list_templates():
-            spec = build_specification(key)
-            self._store.save(spec)
-            names.append(spec.name)
-        return names
+
+def _extract_detail(resp: httpx.Response) -> str:
+    try:
+        body = resp.json()
+        if isinstance(body, dict) and "detail" in body:
+            return str(body["detail"])
+    except Exception:  # noqa: BLE001 - non-JSON error body
+        pass
+    return resp.text or f"gabriel-core error {resp.status_code}"
+
+
+# Backwards-compatible alias. The prior implementation exposed ``CoreSpecService``
+# (an in-process facade that imported gabriel-core). It is now an HTTP client.
+CoreSpecService = CoreSpecClient
