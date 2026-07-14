@@ -1,103 +1,172 @@
 /**
- * Auth service — talks to the Gateway's session endpoints, which delegate to
- * the Identity Service (ADR-007). The browser never mints or inspects primary
- * tokens; it only reads a session view backed by an httpOnly cookie.
+ * Auth service — talks to gabriel-core's `/auth` endpoints.
  *
- * M0: no Gateway/Identity Service yet, so the Dev Identity Provider is emulated
- * locally from mock principals. The shape of what we return here is identical
- * to what the real /auth/session endpoint will produce, so nothing downstream
- * changes when USE_MOCK flips to false.
+ * Flow: register/login return an access token (JWT, short-lived) plus a
+ * single-use rotated refresh token. Both are kept in the token store; every
+ * request attaches the access token, and the client transparently refreshes
+ * on expiry/401 (see gateway-client). Logout revokes the refresh token
+ * server-side and clears local state.
  */
 import type { DevPrincipalOption, Session } from '@/types';
-import { gatewayRequest, isMock, mockDelay } from './gateway-client';
-import { devPrincipals } from './mock/data';
+import type {
+  LoginResponseDto,
+  RegisterResponseDto,
+  SessionDto,
+  TokenPairDto,
+  UserDto,
+} from '@/types/api';
+import { gatewayRequest } from './gateway-client';
+import { clearTokens, getRefreshToken, setTokens } from './token-store';
 
-const SESSION_STORAGE_KEY = 'gabriel.session';
-const PRINCIPAL_TOKEN_STORAGE_KEY = 'gabriel.principalToken';
+function mapSession(dto: SessionDto): Session {
+  return {
+    user: {
+      id: dto.user.id ?? dto.user.principal,
+      principal: dto.user.principal,
+      displayName: dto.user.displayName,
+      email: dto.user.email ?? undefined,
+      avatarUrl: dto.user.avatarUrl,
+      initials:
+        dto.user.initials ||
+        dto.user.displayName
+          .split(' ')
+          .map((p) => p[0])
+          .slice(0, 2)
+          .join('')
+          .toUpperCase(),
+      roles: (dto.user.roles ?? []) as Session['user']['roles'],
+    },
+    organization: { id: dto.organization.id, name: dto.organization.name },
+    tenantId: dto.tenantId,
+    authMethod: dto.authMethod,
+    expiresAt: dto.expiresAt ?? new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  };
+}
 
-function persistPrincipalToken(token: string | null): void {
-  if (typeof window === 'undefined') return;
-  if (token) {
-    window.localStorage.setItem(PRINCIPAL_TOKEN_STORAGE_KEY, token);
-    return;
+function persistTokens(pair: TokenPairDto): void {
+  setTokens({
+    accessToken: pair.access_token,
+    refreshToken: pair.refresh_token ?? null,
+    expiresAt: pair.expires_at ?? null,
+  });
+}
+
+export interface RegisterInput {
+  email: string;
+  password: string;
+  displayName: string;
+  organizationName?: string;
+}
+
+/** Self-service signup: creates an organization + owner user, then signs in. */
+export async function register(input: RegisterInput): Promise<Session> {
+  const response = await gatewayRequest<RegisterResponseDto>('/auth/register', {
+    method: 'POST',
+    body: {
+      email: input.email,
+      password: input.password,
+      display_name: input.displayName,
+      organization_name: input.organizationName || undefined,
+    },
+  });
+  persistTokens(response);
+  const session = mapSession(response.session);
+  // Registration returns the authoritative org display name — prefer it.
+  if (response.organization?.name) {
+    session.organization = {
+      id: response.organization.id,
+      name: response.organization.name,
+    };
   }
-  window.localStorage.removeItem(PRINCIPAL_TOKEN_STORAGE_KEY);
+  return session;
+}
+
+export interface LoginInput {
+  email: string;
+  password: string;
+  /** Optional org disambiguation when the email exists in several orgs. */
+  orgId?: string;
+}
+
+/** Email/password login via the backend's password identity provider. */
+export async function loginWithPassword(input: LoginInput): Promise<Session> {
+  const response = await gatewayRequest<LoginResponseDto>('/auth/login', {
+    method: 'POST',
+    body: {
+      method: 'password',
+      credentials: {
+        email: input.email,
+        password: input.password,
+        ...(input.orgId ? { org_id: input.orgId } : {}),
+      },
+    },
+  });
+  persistTokens(response);
+  return mapSession(response.session);
 }
 
 /** List identities selectable in the Dev Identity Provider (dev only). */
 export async function listDevPrincipals(): Promise<DevPrincipalOption[]> {
-  const principals = await gatewayRequest<DevPrincipalOption[]>('/auth/dev/principals');
-  console.log('[auth] dev principals', principals);
-  return principals;
+  try {
+    return await gatewayRequest<DevPrincipalOption[]>('/auth/dev/principals');
+  } catch {
+    return [];
+  }
 }
 
-/** Build a Session view from a selected dev principal. */
-function sessionFromPrincipal(option: DevPrincipalOption): Session {
-  const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString();
-  return {
-    user: {
-      id: option.user.id,
-      principal: option.user.principal,
-      displayName: option.user.displayName,
-      email: option.user.email,
-      initials: option.user.initials,
-      avatarUrl: null,
-      roles: option.roles,
-    },
-    organization: option.organization,
-    tenantId: option.organization.id,
-    authMethod: 'dev',
-    expiresAt: expires,
-  };
-}
-
-/**
- * Log in. In prod this posts credentials/authorization codes to the Gateway,
- * which delegates to the Identity Service and sets an httpOnly session cookie.
- * In M0 we resolve the chosen dev principal and persist a session view locally.
- */
+/** Sign in as a dev principal (development environments only). */
 export async function loginWithDevPrincipal(userId: string): Promise<Session> {
-  const session = await gatewayRequest<Session>('/auth/dev/login', {
+  const response = await gatewayRequest<LoginResponseDto>('/auth/login', {
     method: 'POST',
-    body: { userId },
+    body: { method: 'dev', credentials: { userId } },
   });
-  persistPrincipalToken(session.user.principal);
-  return session;
-}
-
-export async function getPrincipalToken(): Promise<string | null> {
-  const token = window.localStorage.getItem(PRINCIPAL_TOKEN_STORAGE_KEY);
-  return token;
+  persistTokens(response);
+  return mapSession(response.session);
 }
 
 /** Read the current session, or null if unauthenticated. */
 export async function getSession(): Promise<Session | null> {
-  // if (isMock('auth')) {
-  //   if (typeof window === 'undefined') return null;
-  //   const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-  //   const session = raw ? (JSON.parse(raw) as Session) : null;
-  //   persistPrincipalToken(session?.user.principal ?? null);
-  //   return session;
-  // }
   try {
-    const session = await gatewayRequest<Session>('/auth/session');
-    persistPrincipalToken(session.user.principal);
-    return session;
+    const dto = await gatewayRequest<SessionDto>('/auth/session', {
+      anonymous: false,
+    });
+    return mapSession(dto);
   } catch {
-    persistPrincipalToken(null);
     return null;
   }
 }
 
-/** End the session. Clears the cookie server-side in prod. */
+/** The full user record behind the session (email, timestamps, GRN). */
+export async function getOwnUser(): Promise<UserDto | null> {
+  try {
+    return await gatewayRequest<UserDto>('/users/me');
+  } catch {
+    return null;
+  }
+}
+
+/** Change the calling user's password. */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await gatewayRequest<void>('/users/me/password', {
+    method: 'POST',
+    body: { current_password: currentPassword, new_password: newPassword },
+  });
+}
+
+/** End the session: revoke the refresh token server-side, clear local state. */
 export async function logout(): Promise<void> {
-  // if (isMock('auth')) {
-  //   if (typeof window !== 'undefined') {
-  //     window.localStorage.removeItem(SESSION_STORAGE_KEY);
-  //   }
-  //   persistPrincipalToken(null);
-  //   return;
-  // }
-  await gatewayRequest<void>('/auth/logout', { method: 'POST' });
-  persistPrincipalToken(null);
+  const refreshToken = getRefreshToken();
+  try {
+    await gatewayRequest<void>('/auth/logout', {
+      method: 'POST',
+      body: refreshToken ? { refresh_token: refreshToken } : {},
+    });
+  } catch {
+    // Best-effort: local sign-out must succeed even if the API is down.
+  } finally {
+    clearTokens();
+  }
 }

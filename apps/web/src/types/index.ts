@@ -9,4 +9,5 @@ export * from './event';
 export * from './chat';
 export * from './workspace';
 export * from './notification';
+export * from './knowledge';
 export * from './search';

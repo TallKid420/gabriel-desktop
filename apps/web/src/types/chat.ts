@@ -7,7 +7,7 @@
  */
 import type { GRN, ISODateString } from './common';
 
-export type MessageRole = 'user' | 'assistant' | 'system';
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
 export interface Attachment {
   id: string;
@@ -28,6 +28,10 @@ export interface Message {
   attachments?: Attachment[];
   /** Agent that produced an assistant message. */
   agentGrn?: GRN;
+  /** Model that produced an assistant message. */
+  model?: string;
+  /** Token accounting for the turn, when reported by the runtime. */
+  totalTokens?: number;
 }
 
 export interface Conversation {
@@ -39,6 +43,7 @@ export interface Conversation {
   updatedAt: ISODateString;
   messageCount: number;
   lastMessagePreview?: string;
+  status?: 'active' | 'archived';
 }
 
 /** Discriminated chunks emitted while an assistant response streams. */

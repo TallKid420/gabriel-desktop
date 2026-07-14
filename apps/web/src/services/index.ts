@@ -11,8 +11,10 @@ export * as memory from './memory';
 export * as resources from './resources';
 export * as events from './events';
 export * as notifications from './notifications';
+export * as knowledge from './knowledge';
+export * as organizations from './organizations';
 export * as dashboard from './dashboard';
 export * as search from './search';
 
-export { GatewayError, GATEWAY_URL, USE_MOCK } from './gateway-client';
+export { GatewayError, GATEWAY_URL, API_URL, USE_MOCK, setUnauthorizedHandler } from './gateway-client';
 export type { DashboardSnapshot, DashboardStat } from './dashboard';

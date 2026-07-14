@@ -18,6 +18,10 @@ export interface GabrielDocument {
   owner?: string;
   contentHash?: string;
   sourceUri?: string;
+  /** Knowledge source the document is attached to, if any. */
+  knowledgeSourceGrn?: GRN;
+  /** Number of embedded chunks produced during processing. */
+  chunkCount?: number;
   updatedAt: ISODateString;
   tags?: string[];
 }

@@ -15,7 +15,10 @@ export type LLMProviderId =
   | 'openai'
   | 'anthropic'
   | 'google'
-  | 'ollama';
+  | 'ollama'
+  // Providers are registered dynamically in the Gateway's registry, so any
+  // other identifier is also valid on the wire.
+  | (string & {});
 
 /** Per-agent model configuration (mirrors the eventual SDK AgentConfig). */
 export interface AgentConfig {
@@ -59,6 +62,12 @@ export interface Agent {
   role: string;
   description?: string;
   status: AgentStatus;
+  /** Whether the agent is enabled for execution (independent of status). */
+  enabled?: boolean;
+  /** Instructions prepended to every conversation turn. */
+  systemPrompt?: string;
+  /** Knowledge source GRNs used to ground the agent's answers (RAG). */
+  knowledgeSources?: string[];
   config: AgentConfig;
   /** Display accent color (OKLCH) for avatars/cards. */
   accent?: string;
