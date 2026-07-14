@@ -11,6 +11,7 @@ export type WorkspaceId =
   | 'chat'
   | 'agents'
   | 'documents'
+  | 'notifications'
   | 'memory'
   | 'resources'
   | 'workflows'
