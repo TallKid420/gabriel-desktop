@@ -6,5 +6,6 @@ export default async function AgentDetailPage({
   params: Promise<{ agentId: string }>;
 }) {
   const { agentId } = await params;
-  return <AgentDetail agentId={agentId} />;
+  // Agent ids are GRNs (contain `:` and `/`) and arrive percent-encoded.
+  return <AgentDetail agentId={decodeURIComponent(agentId)} />;
 }
