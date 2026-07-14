@@ -1,17 +1,29 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { LogOut, Moon, Sun, ShieldCheck, User as UserIcon } from 'lucide-react';
+import { useState, type FormEvent } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  LogOut,
+  Moon,
+  Sun,
+  ShieldCheck,
+  User as UserIcon,
+  KeyRound,
+  Loader2,
+} from 'lucide-react';
+import { toast } from 'sonner';
 import { PageHeader } from '@/components/common/page-header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { useSessionStore } from '@/stores/session-store';
 import { useUIStore } from '@/stores/ui-store';
-import { auth } from '@/services';
+import { auth, GatewayError } from '@/services';
 
 export function SettingsView() {
   const session = useSessionStore((s) => s.session);
@@ -21,11 +33,45 @@ export function SettingsView() {
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
 
+  // Password change form state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [pwError, setPwError] = useState<string | null>(null);
+  const [pwSubmitting, setPwSubmitting] = useState(false);
+
+  const { data: me } = useQuery({
+    queryKey: ['users', 'me'],
+    queryFn: () => auth.getOwnUser(),
+  });
+
   const logout = async () => {
     setLoggingOut(true);
     await auth.logout();
     clearSession();
     router.push('/login');
+  };
+
+  const onChangePassword = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (pwSubmitting) return;
+    setPwError(null);
+    setPwSubmitting(true);
+    try {
+      await auth.changePassword(currentPassword, newPassword);
+      toast.success('Password updated');
+      setCurrentPassword('');
+      setNewPassword('');
+    } catch (err) {
+      if (err instanceof GatewayError && err.status === 401) {
+        setPwError('Current password is incorrect.');
+      } else if (err instanceof GatewayError) {
+        setPwError(err.message || 'Could not update password.');
+      } else {
+        setPwError('Could not update password.');
+      }
+    } finally {
+      setPwSubmitting(false);
+    }
   };
 
   if (!session) return null;
@@ -49,13 +95,22 @@ export function SettingsView() {
               <AvatarFallback className="text-base">{user.initials}</AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold">{user.displayName}</p>
-              {user.email && (
-                <p className="text-sm text-muted-foreground">{user.email}</p>
+              <p className="text-sm font-semibold">
+                {me?.display_name ?? user.displayName}
+              </p>
+              {(me?.email ?? user.email) && (
+                <p className="text-sm text-muted-foreground">
+                  {me?.email ?? user.email}
+                </p>
               )}
               <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground/70">
-                {user.principal}
+                {me?.grn ?? user.principal}
               </p>
+              {me?.created_at && (
+                <p className="mt-1 text-[11px] text-muted-foreground/70">
+                  Joined {new Date(me.created_at).toLocaleDateString()}
+                </p>
+              )}
             </div>
             <div className="flex flex-col items-end gap-1">
               {user.roles.map((r) => (
@@ -111,6 +166,58 @@ export function SettingsView() {
                 Light
               </Button>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Change password */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <KeyRound className="size-4 text-primary" />
+              Change password
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={onChangePassword} className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="current-password">Current password</Label>
+                <Input
+                  id="current-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="new-password">New password</Label>
+                <Input
+                  id="new-password"
+                  type="password"
+                  autoComplete="new-password"
+                  minLength={8}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  required
+                />
+                <p className="text-xs text-muted-foreground">
+                  Must be at least 8 characters.
+                </p>
+              </div>
+              {pwError && (
+                <p className="text-sm text-destructive">{pwError}</p>
+              )}
+              <Button
+                type="submit"
+                variant="secondary"
+                className="self-start"
+                disabled={pwSubmitting || !currentPassword || !newPassword}
+              >
+                {pwSubmitting && <Loader2 className="size-4 animate-spin" />}
+                Update password
+              </Button>
+            </form>
           </CardContent>
         </Card>
 
