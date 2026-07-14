@@ -3,36 +3,23 @@
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Loader2, LogIn } from 'lucide-react';
+import { Loader2, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { auth, GatewayError } from '@/services';
 import { useSessionStore } from '@/stores/session-store';
+import { GabrielMark } from './login-view';
 
-export function GabrielMark() {
-  return (
-    <div className="grid size-11 place-items-center rounded-xl bg-primary text-primary-foreground">
-      <svg viewBox="0 0 24 24" className="size-6" fill="none">
-        <path
-          d="M12 3 L20 7.5 V16.5 L12 21 L4 16.5 V7.5 Z"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinejoin="round"
-        />
-        <circle cx="12" cy="12" r="2.4" fill="currentColor" />
-      </svg>
-    </div>
-  );
-}
-
-export function LoginView() {
+export function RegisterView() {
   const router = useRouter();
   const setSession = useSessionStore((s) => s.setSession);
 
+  const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [organizationName, setOrganizationName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -42,14 +29,19 @@ export function LoginView() {
     setError(null);
     setSubmitting(true);
     try {
-      const session = await auth.loginWithPassword({ email, password });
+      const session = await auth.register({
+        email,
+        password,
+        displayName,
+        organizationName: organizationName.trim() || undefined,
+      });
       setSession(session);
       router.push('/');
     } catch (err) {
-      if (err instanceof GatewayError && err.status === 401) {
-        setError('Invalid email or password.');
+      if (err instanceof GatewayError && err.status === 409) {
+        setError('An account with this email already exists.');
       } else if (err instanceof GatewayError) {
-        setError(err.message || 'Sign-in failed. Please try again.');
+        setError(err.message || 'Registration failed. Please try again.');
       } else {
         setError('Unable to reach the Gabriel API. Is the backend running?');
       }
@@ -64,19 +56,31 @@ export function LoginView() {
           <GabrielMark />
           <h1 className="mt-4 text-2xl font-semibold tracking-tight">Gabriel</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Enterprise AI Operating System
+            Create your workspace
           </p>
         </div>
 
         <Card className="p-6">
           <div className="mb-5">
-            <p className="text-sm font-semibold">Sign in</p>
+            <p className="text-sm font-semibold">Create an account</p>
             <p className="text-xs text-muted-foreground">
-              Use your workspace email and password.
+              You&apos;ll become the owner of a new organization.
             </p>
           </div>
 
           <form onSubmit={onSubmit} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="displayName">Full name</Label>
+              <Input
+                id="displayName"
+                autoComplete="name"
+                placeholder="Ada Lovelace"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                required
+              />
+            </div>
+
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -95,12 +99,28 @@ export function LoginView() {
               <Input
                 id="password"
                 type="password"
-                autoComplete="current-password"
-                placeholder="••••••••"
+                autoComplete="new-password"
+                placeholder="At least 8 characters"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="organizationName">
+                Organization name{' '}
+                <span className="font-normal text-muted-foreground">
+                  (optional)
+                </span>
+              </Label>
+              <Input
+                id="organizationName"
+                autoComplete="organization"
+                placeholder="Acme Inc."
+                value={organizationName}
+                onChange={(e) => setOrganizationName(e.target.value)}
               />
             </div>
 
@@ -117,27 +137,22 @@ export function LoginView() {
               {submitting ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
-                <LogIn className="size-4" />
+                <UserPlus className="size-4" />
               )}
-              Sign in
+              Create account
             </Button>
           </form>
 
           <p className="mt-5 text-center text-xs text-muted-foreground">
-            New to Gabriel?{' '}
+            Already have an account?{' '}
             <Link
-              href="/register"
+              href="/login"
               className="font-medium text-primary underline-offset-2 hover:underline"
             >
-              Create an account
+              Sign in
             </Link>
           </p>
         </Card>
-
-        <p className="mt-6 text-center text-xs text-muted-foreground">
-          Sessions carry identity only — no permissions. Authorization is
-          evaluated at runtime by Core&apos;s Policy Engine (ADR-019).
-        </p>
       </div>
     </div>
   );
