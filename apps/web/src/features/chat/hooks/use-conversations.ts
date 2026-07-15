@@ -26,3 +26,11 @@ export function useCreateConversation() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['conversations'] }),
   });
 }
+
+export function useDeleteConversation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => chatService.deleteConversation(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['conversations'] }),
+  });
+}

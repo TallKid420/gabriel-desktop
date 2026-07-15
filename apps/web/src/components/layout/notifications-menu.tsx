@@ -11,8 +11,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import {
-  useNotifications,
+  useNotificationFeed,
   useMarkAllNotificationsRead,
+  useMarkNotificationRead,
 } from '@/hooks/use-notifications';
 import type { NotificationLevel } from '@/types';
 
@@ -31,9 +32,11 @@ const LEVEL_COLOR: Record<NotificationLevel, string> = {
 };
 
 export function NotificationsMenu({ children }: { children: ReactNode }) {
-  const { data: items = [], isLoading } = useNotifications();
+  const { data, isLoading } = useNotificationFeed();
+  const items = data?.items ?? [];
+  const unread = data?.unreadCount ?? 0;
   const markAll = useMarkAllNotificationsRead();
-  const unread = items.filter((n) => !n.read).length;
+  const markOne = useMarkNotificationRead();
 
   return (
     <DropdownMenu>
@@ -64,12 +67,17 @@ export function NotificationsMenu({ children }: { children: ReactNode }) {
               You&apos;re all caught up.
             </p>
           )}
-          {items.map((n) => {
+          {items.slice(0, 8).map((n) => {
             const Icon = LEVEL_ICON[n.level];
+            const markRead = () => {
+              if (!n.read) markOne.mutate(n.id);
+            };
             const body = (
-              <div
+              <button
+                type="button"
+                onClick={markRead}
                 className={cn(
-                  'flex gap-2.5 rounded-md px-2.5 py-2 transition-colors hover:bg-accent',
+                  'flex w-full gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-accent',
                   !n.read && 'bg-accent/40',
                 )}
               >
@@ -85,16 +93,21 @@ export function NotificationsMenu({ children }: { children: ReactNode }) {
                 {!n.read && (
                   <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary" />
                 )}
-              </div>
+              </button>
             );
             return n.href ? (
-              <Link key={n.id} href={n.href}>
+              <Link key={n.id} href={n.href} onClick={markRead}>
                 {body}
               </Link>
             ) : (
               <div key={n.id}>{body}</div>
             );
           })}
+        </div>
+        <div className="border-t border-border p-1">
+          <Button asChild variant="ghost" size="sm" className="w-full justify-center">
+            <Link href="/notifications">View all</Link>
+          </Button>
         </div>
       </DropdownMenuContent>
     </DropdownMenu>

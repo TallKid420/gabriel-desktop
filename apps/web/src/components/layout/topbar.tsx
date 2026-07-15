@@ -14,7 +14,10 @@ import { cn } from '@/lib/utils';
 import { getWorkspaceByHref } from '@/config/navigation';
 import { useUIStore } from '@/stores/ui-store';
 import { useSessionStore } from '@/stores/session-store';
+import { useNotificationFeed } from '@/hooks/use-notifications';
 import { NotificationsMenu } from './notifications-menu';
+import { UserMenu } from './user-menu';
+import { OrgSwitcher } from './org-switcher';
 
 export function Topbar() {
   const pathname = usePathname();
@@ -26,9 +29,10 @@ export function Topbar() {
   const theme = useUIStore((s) => s.theme);
   const toggleTheme = useUIStore((s) => s.toggleTheme);
   const session = useSessionStore((s) => s.session);
+  const { data: feed } = useNotificationFeed();
+  const unread = feed?.unreadCount ?? 0;
 
   const current = getWorkspaceByHref(pathname);
-  const orgName = session?.organization.name ?? 'Gabriel';
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur">
@@ -43,7 +47,7 @@ export function Topbar() {
       )}
 
       <nav className="flex min-w-0 items-center gap-1.5 text-sm">
-        <span className="truncate text-muted-foreground">{orgName}</span>
+        <OrgSwitcher />
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
         <span className="truncate font-medium text-foreground">
           {current.label}
@@ -80,7 +84,11 @@ export function Topbar() {
             aria-label="Notifications"
           >
             <Bell className="h-4 w-4" />
-            <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-primary" />
+            {unread > 0 && (
+              <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                {unread > 99 ? '99+' : unread}
+              </span>
+            )}
           </button>
         </NotificationsMenu>
 
@@ -97,6 +105,8 @@ export function Topbar() {
           <Sparkles className="h-3.5 w-3.5 text-primary" />
           Assistant
         </button>
+
+        <UserMenu />
       </div>
     </header>
   );

@@ -1,66 +1,90 @@
 /**
- * Documents service — list/get/upload. Core handles ingestion (hashing,
- * normalization, storage); the UI only lists documents and submits uploads.
+ * Documents service — upload/list/delete against gabriel-core's document
+ * library. Ingestion (hashing, normalization, chunking, embeddings) happens
+ * server-side; uploads can be linked to a knowledge source so agents can
+ * ground answers in them (RAG).
  */
-import type { DeleteResult, GabrielDocument } from '@/types';
-import { gatewayRequest, mockDelay, USE_MOCK } from './gateway-client';
-import { documents as mockDocuments } from './mock/data';
+import type { DeleteResult, GabrielDocument, DocumentStatus } from '@/types';
+import type { DocumentDto, Paginated } from '@/types/api';
+import { gatewayRequest } from './gateway-client';
 
-export async function listDocuments(): Promise<GabrielDocument[]> {
-  if (USE_MOCK) {
-    const sorted = [...mockDocuments].sort((a, b) =>
-      b.updatedAt.localeCompare(a.updatedAt),
+function mapStatus(status: DocumentDto['status']): DocumentStatus {
+  switch (status) {
+    case 'processed':
+      return 'ready';
+    case 'failed':
+      return 'failed';
+    default:
+      // `uploaded` and `processing` both render as in-flight.
+      return 'processing';
+  }
+}
+
+function mapDocument(dto: DocumentDto): GabrielDocument {
+  return {
+    grn: dto.grn,
+    id: dto.grn,
+    title: dto.filename.replace(/\.[^.]+$/, ''),
+    filename: dto.filename,
+    mediaType: dto.media_type ?? undefined,
+    byteSize: dto.byte_size,
+    status: mapStatus(dto.status),
+    contentHash: dto.content_hash,
+    sourceUri: dto.source_uri ?? undefined,
+    knowledgeSourceGrn: dto.knowledge_source_grn ?? undefined,
+    chunkCount: dto.chunk_count,
+    updatedAt: dto.updated_at,
+    tags: dto.labels ? Object.values(dto.labels) : [],
+  };
+}
+
+export async function listDocuments(options?: {
+  knowledgeSourceGrn?: string;
+}): Promise<GabrielDocument[]> {
+  const page = await gatewayRequest<Paginated<DocumentDto>>('/documents', {
+    params: { limit: 100, knowledge_source_grn: options?.knowledgeSourceGrn },
+  });
+  return page.items
+    .map(mapDocument)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function getDocument(grn: string): Promise<GabrielDocument | null> {
+  try {
+    const dto = await gatewayRequest<DocumentDto>(
+      `/documents/${encodeURIComponent(grn)}`,
     );
-    return mockDelay(sorted);
+    return mapDocument(dto);
+  } catch {
+    return null;
   }
-  return gatewayRequest<GabrielDocument[]>('/documents');
 }
 
-export async function getDocument(id: string): Promise<GabrielDocument | null> {
-  if (USE_MOCK) {
-    return mockDelay(mockDocuments.find((d) => d.id === id) ?? null, 140);
-  }
-  return gatewayRequest<GabrielDocument>(`/documents/${id}`);
+export interface UploadDocumentInput {
+  file: File;
+  /** Optional knowledge source to attach the document to. */
+  knowledgeSourceGrn?: string;
 }
 
-/**
- * Upload a document. In M0 we synthesize a "processing" entry that flips to
- * "ready" so the UI can demo the ingestion lifecycle. In prod this posts
- * multipart form data to the Gateway which streams it to Core.
- */
-export async function uploadDocument(file: File): Promise<GabrielDocument> {
-  if (USE_MOCK) {
-    const id = `d_${Date.now()}`;
-    const doc: GabrielDocument = {
-      grn: `grn://org_harbor/document/${id}`,
-      id,
-      title: file.name.replace(/\.[^.]+$/, ''),
-      filename: file.name,
-      mediaType: file.type || 'application/octet-stream',
-      byteSize: file.size,
-      status: 'processing',
-      owner: 'You',
-      updatedAt: new Date().toISOString(),
-      tags: [],
-    };
-    mockDocuments.unshift(doc);
-    // Simulate async ingestion completing.
-    setTimeout(() => {
-      doc.status = 'ready';
-      doc.updatedAt = new Date().toISOString();
-    }, 2500);
-    return mockDelay(doc, 300);
-  }
+/** Upload a document as multipart form data; the backend processes it inline. */
+export async function uploadDocument(
+  input: UploadDocumentInput | File,
+): Promise<GabrielDocument> {
+  const { file, knowledgeSourceGrn } =
+    input instanceof File ? { file: input, knowledgeSourceGrn: undefined } : input;
   const form = new FormData();
   form.append('file', file);
-  return gatewayRequest<GabrielDocument>('/documents', { method: 'POST', form });
+  if (knowledgeSourceGrn) form.append('knowledge_source_grn', knowledgeSourceGrn);
+  const dto = await gatewayRequest<DocumentDto>('/documents', {
+    method: 'POST',
+    form,
+  });
+  return mapDocument(dto);
 }
 
-export async function deleteDocument(id: string): Promise<DeleteResult> {
-  if (USE_MOCK) {
-    const idx = mockDocuments.findIndex((d) => d.id === id);
-    if (idx >= 0) mockDocuments.splice(idx, 1);
-    return mockDelay({ deleted: idx >= 0, id }, 160);
-  }
-  return gatewayRequest<DeleteResult>(`/documents/${id}`, { method: 'DELETE' });
+export async function deleteDocument(grn: string): Promise<DeleteResult> {
+  await gatewayRequest<void>(`/documents/${encodeURIComponent(grn)}`, {
+    method: 'DELETE',
+  });
+  return { deleted: true, id: grn, grn };
 }

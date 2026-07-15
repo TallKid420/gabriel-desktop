@@ -2,7 +2,7 @@
 
 import { useEffect, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { auth } from '@/services';
+import { auth, setUnauthorizedHandler } from '@/services';
 import { useSessionStore } from '@/stores/session-store';
 
 /**
@@ -16,6 +16,17 @@ export function SessionGuard({ children }: { children: ReactNode }) {
   const session = useSessionStore((s) => s.session);
   const hydrated = useSessionStore((s) => s.hydrated);
   const setSession = useSessionStore((s) => s.setSession);
+  const clear = useSessionStore((s) => s.clear);
+
+  // When a request ultimately fails with 401 (refresh exhausted), drop the
+  // local session and send the user back to the login screen.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      clear();
+      router.replace('/login');
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [clear, router]);
 
   useEffect(() => {
     if (hydrated) return;

@@ -1,123 +1,173 @@
 /**
- * Agents service — list/get agents and manage per-agent configuration.
+ * Agents service — CRUD against gabriel-core's agent management API.
  *
  * LLM configuration is per-agent (ADR-007 §7): there is no global model. The
- * `config` object here mirrors the eventual SDK AgentConfig, so switching
- * providers never touches the runtime core — only this config + the Gateway's
- * provider registry.
+ * backend serializes model settings under the wire name `model_config`
+ * alongside the system prompt, allowed tools and knowledge sources.
  */
-import type { Agent, AgentConfig, DeleteResult } from '@/types';
-import { gatewayRequest, mockDelay, USE_MOCK } from './gateway-client';
-import { agents as mockAgents } from './mock/data';
-import { getPrincipalToken } from './auth';
+import type { Agent, AgentConfig, DeleteResult, LLMProviderId } from '@/types';
+import type {
+  AgentCreateDto,
+  AgentDto,
+  AgentUpdateDto,
+  Paginated,
+  ProviderDto,
+  ProviderModelDto,
+} from '@/types/api';
+import { gatewayRequest } from './gateway-client';
+
+function mapAgent(dto: AgentDto): Agent {
+  const status: Agent['status'] = !dto.enabled
+    ? 'disabled'
+    : dto.status === 'active'
+      ? 'active'
+      : dto.status === 'paused'
+        ? 'paused'
+        : 'idle';
+  return {
+    grn: dto.grn,
+    id: dto.grn,
+    name: dto.name,
+    role: dto.description || 'Agent',
+    description: dto.description || undefined,
+    status,
+    enabled: dto.enabled,
+    systemPrompt: dto.system_prompt || undefined,
+    knowledgeSources: dto.knowledge_sources ?? [],
+    config: {
+      provider: (dto.model_config?.provider ?? 'ollama') as LLMProviderId,
+      model: dto.model_config?.model ?? '',
+      temperature: dto.model_config?.temperature ?? undefined,
+      maxTokens: dto.model_config?.max_tokens ?? undefined,
+      tools: dto.allowed_tools ?? [],
+      systemPrompt: dto.system_prompt || undefined,
+    },
+    createdAt: dto.created_at,
+    updatedAt: dto.updated_at,
+  };
+}
 
 export interface CreateAgentInput {
   name: string;
-  role: string;
   description?: string;
+  systemPrompt?: string;
   config: AgentConfig;
-  accent?: string;
+  knowledgeSources?: string[];
+}
+
+export interface UpdateAgentInput {
+  name?: string;
+  description?: string;
+  systemPrompt?: string;
+  config?: Partial<AgentConfig>;
+  knowledgeSources?: string[];
+}
+
+function toWire(input: UpdateAgentInput): AgentUpdateDto {
+  const wire: AgentUpdateDto = {};
+  if (input.name !== undefined) wire.name = input.name;
+  if (input.description !== undefined) wire.description = input.description;
+  if (input.systemPrompt !== undefined) wire.system_prompt = input.systemPrompt;
+  if (input.knowledgeSources !== undefined)
+    wire.knowledge_sources = input.knowledgeSources;
+  if (input.config) {
+    wire.model_config = {
+      provider: input.config.provider,
+      model: input.config.model,
+      temperature: input.config.temperature,
+      max_tokens: input.config.maxTokens,
+    };
+    if (input.config.tools !== undefined) wire.allowed_tools = input.config.tools;
+  }
+  return wire;
 }
 
 export async function listAgents(): Promise<Agent[]> {
-  const principalToken = await getPrincipalToken();
-  return gatewayRequest<Agent[]>('/agents', {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${principalToken}`,
-      // "X-Capabilities": "read_resources,write_resources,execute_workflow",
-    }
+  const page = await gatewayRequest<Paginated<AgentDto>>('/agents', {
+    params: { limit: 100 },
   });
+  return page.items.map(mapAgent);
 }
 
 export async function createAgent(input: CreateAgentInput): Promise<Agent> {
-  if (USE_MOCK) {
-    const id = input.name
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)/g, '') || `agent-${Date.now()}`;
-
-    const agent: Agent = {
-      grn: `grn://org_harbor/agent/${id}`,
-      id,
-      name: input.name,
-      role: input.role,
-      description: input.description,
-      status: 'idle',
-      config: input.config,
-      accent: input.accent ?? 'oklch(0.62 0.17 256)',
-      metrics: { runs: 0, successRate: 0 },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    mockAgents.unshift(agent);
-    return mockDelay({ ...agent }, 220);
-  }
-
-  const principalToken = await getPrincipalToken();
-  return gatewayRequest<Agent>('/agents', {
-    method: 'POST',
-    body: input,
-    headers: {
-      Authorization: `Bearer ${principalToken}`,
+  const body: AgentCreateDto = {
+    name: input.name,
+    description: input.description ?? '',
+    system_prompt: input.systemPrompt ?? input.config.systemPrompt ?? '',
+    model_config: {
+      provider: input.config.provider,
+      model: input.config.model,
+      temperature: input.config.temperature,
+      max_tokens: input.config.maxTokens,
     },
-  });
+    knowledge_sources: input.knowledgeSources ?? [],
+  };
+  const dto = await gatewayRequest<AgentDto>('/agents', { method: 'POST', body });
+  return mapAgent(dto);
 }
 
-export async function getAgent(id: string): Promise<Agent | null> {
-  if (USE_MOCK) {
-    return mockDelay(mockAgents.find((a) => a.id === id) ?? null, 140);
+export async function getAgent(grn: string): Promise<Agent | null> {
+  try {
+    const dto = await gatewayRequest<AgentDto>(`/agents/${encodeURIComponent(grn)}`);
+    return mapAgent(dto);
+  } catch {
+    return null;
   }
-  return gatewayRequest<Agent>(`/agents/${id}`);
 }
 
+export async function updateAgent(
+  grn: string,
+  input: UpdateAgentInput,
+): Promise<Agent> {
+  const dto = await gatewayRequest<AgentDto>(`/agents/${encodeURIComponent(grn)}`, {
+    method: 'PATCH',
+    body: toWire(input),
+  });
+  return mapAgent(dto);
+}
+
+/** Legacy helper kept for call sites that only edit model settings. */
 export async function updateAgentConfig(
-  id: string,
+  grn: string,
   config: Partial<AgentConfig>,
 ): Promise<Agent> {
-  if (USE_MOCK) {
-    const agent = mockAgents.find((a) => a.id === id);
-    if (!agent) throw new Error(`Unknown agent: ${id}`);
-    agent.config = { ...agent.config, ...config };
-    return mockDelay({ ...agent }, 180);
-  }
-  return gatewayRequest<Agent>(`/agents/${id}/config`, {
-    method: 'PATCH',
-    body: config,
-  });
+  return updateAgent(grn, { config, systemPrompt: config.systemPrompt });
 }
 
 export async function setAgentEnabled(
-  id: string,
+  grn: string,
   enabled: boolean,
 ): Promise<Agent> {
-  if (USE_MOCK) {
-    const agent = mockAgents.find((a) => a.id === id);
-    if (!agent) throw new Error(`Unknown agent: ${id}`);
-    agent.status = enabled ? 'active' : 'disabled';
-    return mockDelay({ ...agent }, 160);
-  }
-  return gatewayRequest<Agent>(`/agents/${id}/${enabled ? 'enable' : 'disable'}`, {
-    method: 'POST',
-  });
+  await gatewayRequest<unknown>(
+    `/agents/${encodeURIComponent(grn)}/${enabled ? 'enable' : 'disable'}`,
+    { method: 'POST' },
+  );
+  const agent = await getAgent(grn);
+  if (!agent) throw new Error('Agent disappeared after toggling');
+  return agent;
 }
 
-export async function deleteAgent(id: string): Promise<DeleteResult> {
-  if (USE_MOCK) {
-    const idx = mockAgents.findIndex((a) => a.id === id);
-    const deleted = idx >= 0;
-    const grn = deleted ? mockAgents[idx].grn : undefined;
-    if (deleted) mockAgents.splice(idx, 1);
-    return mockDelay({ deleted, id, grn }, 160);
-  }
-
-  const principalToken = await getPrincipalToken();
-  return gatewayRequest<DeleteResult>(`/agents/${id}`, {
+export async function deleteAgent(grn: string): Promise<DeleteResult> {
+  await gatewayRequest<unknown>(`/agents/${encodeURIComponent(grn)}`, {
     method: 'DELETE',
-    headers: {
-      Authorization: `Bearer ${principalToken}`,
-    },
   });
+  return { deleted: true, id: grn, grn };
+}
+
+// ── AI Gateway provider catalog (for the model picker) ─────────────────────
+
+export async function listProviders(): Promise<ProviderDto[]> {
+  const data = await gatewayRequest<{ items: ProviderDto[] }>('/gateway/providers');
+  return data.items;
+}
+
+export async function listProviderModels(name: string): Promise<ProviderModelDto[]> {
+  try {
+    const data = await gatewayRequest<{ items: ProviderModelDto[] }>(
+      `/gateway/providers/${encodeURIComponent(name)}/models`,
+    );
+    return data.items;
+  } catch {
+    return [];
+  }
 }

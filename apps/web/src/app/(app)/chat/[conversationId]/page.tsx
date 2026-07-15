@@ -6,5 +6,6 @@ export default async function ConversationPage({
   params: Promise<{ conversationId: string }>;
 }) {
   const { conversationId } = await params;
-  return <ConversationView conversationId={conversationId} />;
+  // Conversation ids are GRNs (contain `:` and `/`) and arrive percent-encoded.
+  return <ConversationView conversationId={decodeURIComponent(conversationId)} />;
 }

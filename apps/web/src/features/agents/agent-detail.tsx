@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Save, Cpu, Activity } from 'lucide-react';
+import { ArrowLeft, Save, Cpu, BookOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/common/page-header';
 import { ErrorState } from '@/components/common/states';
@@ -15,38 +15,67 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
-import type { AgentConfig, LLMProviderId } from '@/types';
-import { useAgent, useUpdateAgentConfig, useSetAgentEnabled } from './hooks';
+import { cn } from '@/lib/utils';
+import {
+  useAgent,
+  useKnowledgeSources,
+  useProviderModels,
+  useProviders,
+  useSetAgentEnabled,
+  useUpdateAgent,
+} from './hooks';
 
-const PROVIDERS: { id: LLMProviderId; label: string }[] = [
-  { id: 'mock', label: 'Gabriel Mock (M0)' },
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'anthropic', label: 'Anthropic' },
-  { id: 'google', label: 'Google' },
-  { id: 'ollama', label: 'Ollama (self-hosted)' },
-];
+const selectClass =
+  'h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
-const REASONING: NonNullable<AgentConfig['reasoningLevel']>[] = ['low', 'medium', 'high'];
+interface Draft {
+  name: string;
+  description: string;
+  systemPrompt: string;
+  provider: string;
+  model: string;
+  temperature: number;
+  maxTokens: number | undefined;
+  knowledgeSources: string[];
+}
 
-/** The formal per-execution lifecycle (ADR-034) shown for transparency. */
-const LIFECYCLE_STAGES = [
-  'created',
-  'queued',
-  'planning',
-  'executing',
-  'waiting',
-  'completed',
-];
+function draftFromAgent(agent: {
+  name: string;
+  description?: string;
+  systemPrompt?: string;
+  knowledgeSources?: string[];
+  config: {
+    provider: string;
+    model: string;
+    temperature?: number;
+    maxTokens?: number;
+    systemPrompt?: string;
+  };
+}): Draft {
+  return {
+    name: agent.name,
+    description: agent.description ?? '',
+    systemPrompt: agent.systemPrompt ?? agent.config.systemPrompt ?? '',
+    provider: agent.config.provider,
+    model: agent.config.model,
+    temperature: agent.config.temperature ?? 0.7,
+    maxTokens: agent.config.maxTokens,
+    knowledgeSources: agent.knowledgeSources ?? [],
+  } as Draft;
+}
 
 export function AgentDetail({ agentId }: { agentId: string }) {
   const { data: agent, isLoading, isError, refetch } = useAgent(agentId);
-  const updateConfig = useUpdateAgentConfig(agentId);
+  const updateAgent = useUpdateAgent(agentId);
   const setEnabled = useSetAgentEnabled(agentId);
+  const { data: providers } = useProviders();
+  const { data: knowledgeSources } = useKnowledgeSources();
 
-  const [draft, setDraft] = useState<AgentConfig | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const { data: models } = useProviderModels(draft?.provider);
 
   useEffect(() => {
-    if (agent) setDraft(agent.config);
+    if (agent) setDraft(draftFromAgent(agent));
   }, [agent]);
 
   if (isError) {
@@ -66,15 +95,27 @@ export function AgentDetail({ agentId }: { agentId: string }) {
     );
   }
 
-  const dirty = JSON.stringify(draft) !== JSON.stringify(agent.config);
+  const baseline = draftFromAgent(agent);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   const enabled = agent.status !== 'disabled';
 
   const save = async () => {
     try {
-      await updateConfig.mutateAsync(draft);
-      toast.success('Agent configuration saved');
+      await updateAgent.mutateAsync({
+        name: draft.name.trim(),
+        description: draft.description.trim(),
+        systemPrompt: draft.systemPrompt,
+        knowledgeSources: draft.knowledgeSources,
+        config: {
+          provider: draft.provider,
+          model: draft.model.trim(),
+          temperature: draft.temperature,
+          maxTokens: draft.maxTokens,
+        },
+      });
+      toast.success('Agent saved');
     } catch {
-      toast.error('Failed to save configuration');
+      toast.error('Failed to save agent');
     }
   };
 
@@ -87,6 +128,18 @@ export function AgentDetail({ agentId }: { agentId: string }) {
     }
   };
 
+  const toggleSource = (grn: string) =>
+    setDraft((d) =>
+      d
+        ? {
+            ...d,
+            knowledgeSources: d.knowledgeSources.includes(grn)
+              ? d.knowledgeSources.filter((g) => g !== grn)
+              : [...d.knowledgeSources, grn],
+          }
+        : d,
+    );
+
   return (
     <div className="mx-auto max-w-4xl">
       <Button asChild variant="ghost" size="sm" className="mb-3 -ml-2">
@@ -98,7 +151,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
 
       <PageHeader
         title={agent.name}
-        description={agent.role}
+        description={agent.description ?? 'Agent configuration'}
         actions={
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
@@ -112,9 +165,9 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                 aria-label="Toggle agent"
               />
             </div>
-            <Button onClick={save} disabled={!dirty || updateConfig.isPending}>
+            <Button onClick={save} disabled={!dirty || updateAgent.isPending}>
               <Save className="size-4" />
-              Save
+              {updateAgent.isPending ? 'Saving…' : 'Save'}
             </Button>
           </div>
         }
@@ -122,6 +175,44 @@ export function AgentDetail({ agentId }: { agentId: string }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="flex flex-col gap-4 lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Profile</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="name">Name</Label>
+                <Input
+                  id="name"
+                  value={draft.name}
+                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="description">Description</Label>
+                <Input
+                  id="description"
+                  value={draft.description}
+                  onChange={(e) =>
+                    setDraft({ ...draft, description: e.target.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="systemPrompt">System prompt</Label>
+                <Textarea
+                  id="systemPrompt"
+                  rows={5}
+                  value={draft.systemPrompt}
+                  onChange={(e) =>
+                    setDraft({ ...draft, systemPrompt: e.target.value })
+                  }
+                  placeholder="Instructions that define this agent's behavior…"
+                />
+              </div>
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
@@ -137,31 +228,61 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                     id="provider"
                     value={draft.provider}
                     onChange={(e) =>
-                      setDraft({ ...draft, provider: e.target.value as LLMProviderId })
+                      setDraft({ ...draft, provider: e.target.value, model: '' })
                     }
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className={selectClass}
                   >
-                    {PROVIDERS.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.label}
+                    {(providers ?? []).map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.name}
+                        {p.default ? ' (default)' : ''}
                       </option>
                     ))}
+                    {/* Preserve the current provider even if not in the list */}
+                    {providers &&
+                      !providers.some((p) => p.name === draft.provider) &&
+                      draft.provider && (
+                        <option value={draft.provider}>{draft.provider}</option>
+                      )}
                   </select>
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="model">Model</Label>
-                  <Input
-                    id="model"
-                    value={draft.model}
-                    onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-                  />
+                  {models && models.length > 0 ? (
+                    <select
+                      id="model"
+                      value={draft.model}
+                      onChange={(e) =>
+                        setDraft({ ...draft, model: e.target.value })
+                      }
+                      className={selectClass}
+                    >
+                      {!models.some((m) => m.name === draft.model) &&
+                        draft.model && (
+                          <option value={draft.model}>{draft.model}</option>
+                        )}
+                      {models.map((m) => (
+                        <option key={m.name} value={m.name}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <Input
+                      id="model"
+                      value={draft.model}
+                      onChange={(e) =>
+                        setDraft({ ...draft, model: e.target.value })
+                      }
+                    />
+                  )}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="temperature">
-                    Temperature ({draft.temperature ?? 0.7})
+                    Temperature ({draft.temperature})
                   </Label>
                   <input
                     id="temperature"
@@ -169,7 +290,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                     min={0}
                     max={1}
                     step={0.1}
-                    value={draft.temperature ?? 0.7}
+                    value={draft.temperature}
                     onChange={(e) =>
                       setDraft({ ...draft, temperature: Number(e.target.value) })
                     }
@@ -185,44 +306,13 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                     onChange={(e) =>
                       setDraft({
                         ...draft,
-                        maxTokens: e.target.value ? Number(e.target.value) : undefined,
+                        maxTokens: e.target.value
+                          ? Number(e.target.value)
+                          : undefined,
                       })
                     }
                   />
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="reasoning">Reasoning</Label>
-                  <select
-                    id="reasoning"
-                    value={draft.reasoningLevel ?? ''}
-                    onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        reasoningLevel:
-                          (e.target.value as AgentConfig['reasoningLevel']) || undefined,
-                      })
-                    }
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <option value="">Default</option>
-                    {REASONING.map((r) => (
-                      <option key={r} value={r}>
-                        {r}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="systemPrompt">System prompt</Label>
-                <Textarea
-                  id="systemPrompt"
-                  rows={5}
-                  value={draft.systemPrompt ?? ''}
-                  onChange={(e) => setDraft({ ...draft, systemPrompt: e.target.value })}
-                  placeholder="Instructions that define this agent's behavior…"
-                />
               </div>
             </CardContent>
           </Card>
@@ -232,54 +322,68 @@ export function AgentDetail({ agentId }: { agentId: string }) {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
-                <Activity className="size-4 text-primary" />
-                Performance
+                <BookOpen className="size-4 text-primary" />
+                Knowledge sources
               </CardTitle>
             </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <Metric label="Total runs" value={agent.metrics?.runs.toLocaleString() ?? '—'} />
-              <Separator />
-              <Metric
-                label="Success rate"
-                value={agent.metrics ? `${agent.metrics.successRate}%` : '—'}
-              />
-              <Separator />
-              <Metric label="Current status" value={<Badge>{agent.status}</Badge>} />
+            <CardContent className="flex flex-col gap-2">
+              <p className="text-xs text-muted-foreground">
+                Ground this agent&apos;s answers in selected document
+                collections (RAG).
+              </p>
+              {(knowledgeSources ?? []).length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No knowledge sources yet. Create one from the Documents page.
+                </p>
+              )}
+              <div className="flex flex-col gap-1.5">
+                {(knowledgeSources ?? []).map((ks) => {
+                  const selected = draft.knowledgeSources.includes(ks.grn);
+                  return (
+                    <button
+                      key={ks.grn}
+                      type="button"
+                      onClick={() => toggleSource(ks.grn)}
+                      className={cn(
+                        'flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors',
+                        selected
+                          ? 'border-primary bg-primary/10 text-foreground'
+                          : 'border-border text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      <span className="truncate">{ks.name}</span>
+                      {selected && (
+                        <Badge variant="secondary" className="ml-2 shrink-0">
+                          linked
+                        </Badge>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm">Execution lifecycle</CardTitle>
+              <CardTitle className="text-sm">Status</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="mb-3 text-xs text-muted-foreground">
-                Every run transitions through formal states (ADR-034). Each
-                transition emits an immutable event in Core.
-              </p>
-              <ol className="flex flex-col gap-1.5">
-                {LIFECYCLE_STAGES.map((s, i) => (
-                  <li key={s} className="flex items-center gap-2 text-xs">
-                    <span className="grid size-5 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
-                      {i + 1}
-                    </span>
-                    <span className="font-mono text-foreground">{s}</span>
-                  </li>
-                ))}
-              </ol>
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Lifecycle</span>
+                <Badge className="capitalize">{agent.status}</Badge>
+              </div>
+              <Separator />
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Enabled</span>
+                <span className="text-sm font-medium text-foreground">
+                  {enabled ? 'Yes' : 'No'}
+                </span>
+              </div>
             </CardContent>
           </Card>
         </div>
       </div>
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-sm font-medium text-foreground">{value}</span>
     </div>
   );
 }
