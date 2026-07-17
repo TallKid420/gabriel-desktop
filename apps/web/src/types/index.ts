@@ -10,4 +10,5 @@ export * from './chat';
 export * from './workspace';
 export * from './notification';
 export * from './knowledge';
+export * from './tool';
 export * from './search';

@@ -2,9 +2,15 @@
  * Knowledge service — knowledge sources (named collections of documents that
  * agents can be grounded in) and semantic search over embedded chunks.
  */
-import type { KnowledgeSource } from '@/types';
+import type { KnowledgeSource, KnowledgeSourceType } from '@/types';
 import type { KnowledgeSourceDto, Paginated } from '@/types/api';
 import { gatewayRequest } from './gateway-client';
+
+function mapSourceType(value: string | undefined): KnowledgeSourceType {
+  return value === 'document_collection' || value === 'external'
+    ? value
+    : 'vector_collection';
+}
 
 function mapSource(dto: KnowledgeSourceDto): KnowledgeSource {
   return {
@@ -12,6 +18,7 @@ function mapSource(dto: KnowledgeSourceDto): KnowledgeSource {
     id: dto.grn,
     name: dto.name,
     description: dto.description || undefined,
+    sourceType: mapSourceType(dto.source_type),
     status: dto.status,
     documentCount: dto.document_count,
     createdAt: dto.created_at,
@@ -19,10 +26,12 @@ function mapSource(dto: KnowledgeSourceDto): KnowledgeSource {
   };
 }
 
-export async function listKnowledgeSources(): Promise<KnowledgeSource[]> {
+export async function listKnowledgeSources(options?: {
+  sourceType?: KnowledgeSourceType;
+}): Promise<KnowledgeSource[]> {
   const page = await gatewayRequest<Paginated<KnowledgeSourceDto>>(
     '/knowledge/sources',
-    { params: { limit: 100 } },
+    { params: { limit: 100, source_type: options?.sourceType } },
   );
   return page.items.map(mapSource);
 }
@@ -30,10 +39,15 @@ export async function listKnowledgeSources(): Promise<KnowledgeSource[]> {
 export async function createKnowledgeSource(input: {
   name: string;
   description?: string;
+  sourceType?: KnowledgeSourceType;
 }): Promise<KnowledgeSource> {
   const dto = await gatewayRequest<KnowledgeSourceDto>('/knowledge/sources', {
     method: 'POST',
-    body: { name: input.name, description: input.description ?? '' },
+    body: {
+      name: input.name,
+      description: input.description ?? '',
+      source_type: input.sourceType ?? 'vector_collection',
+    },
   });
   return mapSource(dto);
 }

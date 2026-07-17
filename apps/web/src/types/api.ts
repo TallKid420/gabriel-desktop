@@ -136,7 +136,9 @@ export interface AgentDto {
   system_prompt: string;
   model_config: AgentModelConfigDto;
   allowed_tools: string[];
+  disabled_tools?: string[];
   knowledge_sources: string[];
+  document_collections?: string[];
   status: string;
   enabled: boolean;
   state: string;
@@ -155,7 +157,9 @@ export interface AgentCreateDto {
   /** Serialized under the wire name `model_config`. */
   model_config?: AgentModelConfigDto;
   allowed_tools?: string[];
+  disabled_tools?: string[];
   knowledge_sources?: string[];
+  document_collections?: string[];
   status?: string;
   metadata?: Record<string, unknown>;
   labels?: Record<string, string>;
@@ -216,6 +220,8 @@ export interface KnowledgeSourceDto {
   org_id: string;
   name: string;
   description: string;
+  /** vector_collection | document_collection | external (ADR-008 grounding). */
+  source_type?: string;
   status: string;
   document_count: number;
   state: string;
@@ -226,6 +232,50 @@ export interface KnowledgeSourceDto {
   metadata?: Record<string, unknown>;
   labels?: Record<string, string>;
 }
+
+// ── Tools ───────────────────────────────────────────────────────────────────
+
+export interface ToolDto {
+  grn: string;
+  org_id: string;
+  name: string;
+  description: string;
+  category: string;
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+  safety_level: number;
+  required_capabilities: string[];
+  runtime_binding: string;
+  /** V1 declaration only: local | enterprise | cloud | edge. */
+  execution_runtime: string;
+  enabled: boolean;
+  configuration: Record<string, unknown>;
+  state: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  metadata?: Record<string, unknown>;
+  labels?: Record<string, string>;
+}
+
+export interface ToolCreateDto {
+  name: string;
+  description?: string;
+  category: string;
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  safety_level?: number;
+  required_capabilities?: string[];
+  runtime_binding?: string;
+  execution_runtime?: string;
+  enabled?: boolean;
+  configuration?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  labels?: Record<string, string>;
+}
+
+export type ToolUpdateDto = Partial<Omit<ToolCreateDto, 'metadata' | 'labels'>>;
 
 // ── Notifications ───────────────────────────────────────────────────────────
 

@@ -17,6 +17,18 @@ export function formatRelativeTime(iso: string): string {
   });
 }
 
+/** Absolute date for metadata panels (e.g. "Jan 12, 2026"). */
+export function formatDate(iso?: string): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
 export function formatBytes(bytes?: number): string {
   if (!bytes) return '—';
   const units = ['B', 'KB', 'MB', 'GB'];

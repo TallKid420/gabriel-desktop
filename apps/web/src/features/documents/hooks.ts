@@ -6,6 +6,7 @@ import {
   knowledge as knowledgeService,
 } from '@/services';
 import type { UploadDocumentInput } from '@/services/documents';
+import type { KnowledgeSourceType } from '@/types';
 
 export function useDocuments(knowledgeSourceGrn?: string) {
   return useQuery({
@@ -44,8 +45,11 @@ export function useKnowledgeSources() {
 export function useCreateKnowledgeSource() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { name: string; description?: string }) =>
-      knowledgeService.createKnowledgeSource(input),
+    mutationFn: (input: {
+      name: string;
+      description?: string;
+      sourceType?: KnowledgeSourceType;
+    }) => knowledgeService.createKnowledgeSource(input),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['knowledge-sources'] }),
   });
 }

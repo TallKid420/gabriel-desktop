@@ -34,6 +34,8 @@ function mapAgent(dto: AgentDto): Agent {
     enabled: dto.enabled,
     systemPrompt: dto.system_prompt || undefined,
     knowledgeSources: dto.knowledge_sources ?? [],
+    documentCollections: dto.document_collections ?? [],
+    disabledTools: dto.disabled_tools ?? [],
     config: {
       provider: (dto.model_config?.provider ?? 'ollama') as LLMProviderId,
       model: dto.model_config?.model ?? '',
@@ -61,6 +63,12 @@ export interface UpdateAgentInput {
   systemPrompt?: string;
   config?: Partial<AgentConfig>;
   knowledgeSources?: string[];
+  /** Document collection GRNs (typed knowledge sources) grounding the agent. */
+  documentCollections?: string[];
+  /** Tool names explicitly denied for this agent (deny-wins). */
+  disabledTools?: string[];
+  /** Tool names the agent may use. Alias for `config.tools`. */
+  allowedTools?: string[];
 }
 
 function toWire(input: UpdateAgentInput): AgentUpdateDto {
@@ -70,6 +78,11 @@ function toWire(input: UpdateAgentInput): AgentUpdateDto {
   if (input.systemPrompt !== undefined) wire.system_prompt = input.systemPrompt;
   if (input.knowledgeSources !== undefined)
     wire.knowledge_sources = input.knowledgeSources;
+  if (input.documentCollections !== undefined)
+    wire.document_collections = input.documentCollections;
+  if (input.disabledTools !== undefined)
+    wire.disabled_tools = input.disabledTools;
+  if (input.allowedTools !== undefined) wire.allowed_tools = input.allowedTools;
   if (input.config) {
     wire.model_config = {
       provider: input.config.provider,

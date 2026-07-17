@@ -68,6 +68,10 @@ export interface Agent {
   systemPrompt?: string;
   /** Knowledge source GRNs used to ground the agent's answers (RAG). */
   knowledgeSources?: string[];
+  /** Document collection GRNs (typed knowledge sources) grounding the agent. */
+  documentCollections?: string[];
+  /** Tool names explicitly denied for this agent (deny-wins over `config.tools`). */
+  disabledTools?: string[];
   config: AgentConfig;
   /** Display accent color (OKLCH) for avatars/cards. */
   accent?: string;

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Save, Cpu, BookOpen } from 'lucide-react';
+import { ArrowLeft, Save, Cpu, BookOpen, FolderOpen, Wrench } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/common/page-header';
 import { ErrorState } from '@/components/common/states';
@@ -16,6 +16,7 @@ import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
+import { useTools } from '@/features/tools/hooks';
 import {
   useAgent,
   useKnowledgeSources,
@@ -37,6 +38,9 @@ interface Draft {
   temperature: number;
   maxTokens: number | undefined;
   knowledgeSources: string[];
+  documentCollections: string[];
+  allowedTools: string[];
+  disabledTools: string[];
 }
 
 function draftFromAgent(agent: {
@@ -44,11 +48,14 @@ function draftFromAgent(agent: {
   description?: string;
   systemPrompt?: string;
   knowledgeSources?: string[];
+  documentCollections?: string[];
+  disabledTools?: string[];
   config: {
     provider: string;
     model: string;
     temperature?: number;
     maxTokens?: number;
+    tools?: string[];
     systemPrompt?: string;
   };
 }): Draft {
@@ -61,6 +68,9 @@ function draftFromAgent(agent: {
     temperature: agent.config.temperature ?? 0.7,
     maxTokens: agent.config.maxTokens,
     knowledgeSources: agent.knowledgeSources ?? [],
+    documentCollections: agent.documentCollections ?? [],
+    allowedTools: agent.config.tools ?? [],
+    disabledTools: agent.disabledTools ?? [],
   } as Draft;
 }
 
@@ -70,6 +80,7 @@ export function AgentDetail({ agentId }: { agentId: string }) {
   const setEnabled = useSetAgentEnabled(agentId);
   const { data: providers } = useProviders();
   const { data: knowledgeSources } = useKnowledgeSources();
+  const { data: orgTools } = useTools();
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const { data: models } = useProviderModels(draft?.provider);
@@ -106,6 +117,9 @@ export function AgentDetail({ agentId }: { agentId: string }) {
         description: draft.description.trim(),
         systemPrompt: draft.systemPrompt,
         knowledgeSources: draft.knowledgeSources,
+        documentCollections: draft.documentCollections,
+        allowedTools: draft.allowedTools,
+        disabledTools: draft.disabledTools,
         config: {
           provider: draft.provider,
           model: draft.model.trim(),
@@ -128,17 +142,48 @@ export function AgentDetail({ agentId }: { agentId: string }) {
     }
   };
 
-  const toggleSource = (grn: string) =>
+  /** Toggle membership of `value` in one of the draft's string-list fields. */
+  const toggleListItem = (
+    key: 'knowledgeSources' | 'documentCollections' | 'allowedTools' | 'disabledTools',
+    value: string,
+  ) =>
     setDraft((d) =>
       d
         ? {
             ...d,
-            knowledgeSources: d.knowledgeSources.includes(grn)
-              ? d.knowledgeSources.filter((g) => g !== grn)
-              : [...d.knowledgeSources, grn],
+            [key]: d[key].includes(value)
+              ? d[key].filter((v) => v !== value)
+              : [...d[key], value],
           }
         : d,
     );
+
+  const toggleSource = (grn: string) => toggleListItem('knowledgeSources', grn);
+
+  /** Assign/unassign a tool. Unassigning also clears any per-agent disable. */
+  const toggleTool = (name: string) =>
+    setDraft((d) => {
+      if (!d) return d;
+      const assigned = d.allowedTools.includes(name);
+      return {
+        ...d,
+        allowedTools: assigned
+          ? d.allowedTools.filter((t) => t !== name)
+          : [...d.allowedTools, name],
+        disabledTools: assigned
+          ? d.disabledTools.filter((t) => t !== name)
+          : d.disabledTools,
+      };
+    });
+
+  // Split knowledge sources by type: vector collections stay in the
+  // "Knowledge sources" card, typed document collections get their own card.
+  const vectorSources = (knowledgeSources ?? []).filter(
+    (ks) => ks.sourceType !== 'document_collection',
+  );
+  const documentCollections = (knowledgeSources ?? []).filter(
+    (ks) => ks.sourceType === 'document_collection',
+  );
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -316,6 +361,77 @@ export function AgentDetail({ agentId }: { agentId: string }) {
               </div>
             </CardContent>
           </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Wrench className="size-4 text-primary" />
+                Tools
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              <p className="text-xs text-muted-foreground">
+                Capabilities this agent may invoke.{' '}
+                {draft.allowedTools.length === 0
+                  ? 'No tools assigned — the agent can use every enabled tool.'
+                  : 'Only the assigned tools are available to this agent.'}
+              </p>
+              {(orgTools ?? []).length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No tools registered yet. Register one from the Tools page.
+                </p>
+              )}
+              <div className="flex flex-col gap-1.5">
+                {(orgTools ?? []).map((tool) => {
+                  const assigned = draft.allowedTools.includes(tool.name);
+                  const deniedHere = draft.disabledTools.includes(tool.name);
+                  return (
+                    <div
+                      key={tool.grn}
+                      className={cn(
+                        'flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm transition-colors',
+                        assigned && !deniedHere
+                          ? 'border-primary bg-primary/10 text-foreground'
+                          : 'border-border text-muted-foreground',
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleTool(tool.name)}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left transition-colors hover:text-foreground"
+                      >
+                        <span className="truncate font-medium">{tool.name}</span>
+                        <span className="hidden truncate text-xs text-muted-foreground sm:inline">
+                          {tool.description}
+                        </span>
+                      </button>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {!tool.enabled && (
+                          <Badge variant="destructive">Disabled org-wide</Badge>
+                        )}
+                        {assigned ? (
+                          <>
+                            <span className="text-xs text-muted-foreground">
+                              {deniedHere ? 'Blocked' : 'Allowed'}
+                            </span>
+                            <Switch
+                              checked={!deniedHere}
+                              onCheckedChange={() =>
+                                toggleListItem('disabledTools', tool.name)
+                              }
+                              aria-label={`Toggle ${tool.name} for this agent`}
+                            />
+                          </>
+                        ) : (
+                          <Badge variant="outline">Not assigned</Badge>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
         <div className="flex flex-col gap-4">
@@ -328,16 +444,16 @@ export function AgentDetail({ agentId }: { agentId: string }) {
             </CardHeader>
             <CardContent className="flex flex-col gap-2">
               <p className="text-xs text-muted-foreground">
-                Ground this agent&apos;s answers in selected document
-                collections (RAG).
+                Ground this agent&apos;s answers in embedded vector collections
+                (RAG).
               </p>
-              {(knowledgeSources ?? []).length === 0 && (
+              {vectorSources.length === 0 && (
                 <p className="text-xs text-muted-foreground">
                   No knowledge sources yet. Create one from the Documents page.
                 </p>
               )}
               <div className="flex flex-col gap-1.5">
-                {(knowledgeSources ?? []).map((ks) => {
+                {vectorSources.map((ks) => {
                   const selected = draft.knowledgeSources.includes(ks.grn);
                   return (
                     <button
@@ -352,6 +468,54 @@ export function AgentDetail({ agentId }: { agentId: string }) {
                       )}
                     >
                       <span className="truncate">{ks.name}</span>
+                      {selected && (
+                        <Badge variant="secondary" className="ml-2 shrink-0">
+                          linked
+                        </Badge>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <FolderOpen className="size-4 text-primary" />
+                Document collections
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2">
+              <p className="text-xs text-muted-foreground">
+                Typed document collections that also ground this agent&apos;s
+                answers.
+              </p>
+              {documentCollections.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  No document collections yet. Create one from the Documents
+                  page.
+                </p>
+              )}
+              <div className="flex flex-col gap-1.5">
+                {documentCollections.map((dc) => {
+                  const selected = draft.documentCollections.includes(dc.grn);
+                  return (
+                    <button
+                      key={dc.grn}
+                      type="button"
+                      onClick={() =>
+                        toggleListItem('documentCollections', dc.grn)
+                      }
+                      className={cn(
+                        'flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors',
+                        selected
+                          ? 'border-primary bg-primary/10 text-foreground'
+                          : 'border-border text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      <span className="truncate">{dc.name}</span>
                       {selected && (
                         <Badge variant="secondary" className="ml-2 shrink-0">
                           linked
