@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { formatBytes, formatRelativeTime } from '@/lib/format';
-import type { DocumentStatus } from '@/types';
+import type { DocumentStatus, KnowledgeSourceType } from '@/types';
 import {
   useDocuments,
   useUploadDocument,
@@ -51,6 +51,8 @@ export function DocumentsView() {
   const [sourceDialogOpen, setSourceDialogOpen] = useState(false);
   const [newSourceName, setNewSourceName] = useState('');
   const [newSourceDesc, setNewSourceDesc] = useState('');
+  const [newSourceType, setNewSourceType] =
+    useState<KnowledgeSourceType>('vector_collection');
 
   const sourceNameByGrn = useMemo(() => {
     const map = new Map<string, string>();
@@ -98,11 +100,13 @@ export function DocumentsView() {
       const created = await createSource.mutateAsync({
         name: newSourceName.trim(),
         description: newSourceDesc.trim() || undefined,
+        sourceType: newSourceType,
       });
       setTargetSource(created.grn);
       setSourceDialogOpen(false);
       setNewSourceName('');
       setNewSourceDesc('');
+      setNewSourceType('vector_collection');
       toast.success(`Created knowledge source "${created.name}"`);
     } catch {
       toast.error('Failed to create knowledge source');
@@ -208,6 +212,25 @@ export function DocumentsView() {
                 placeholder="What this collection contains"
                 disabled={createSource.isPending}
               />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="source-type">Type</Label>
+              <select
+                id="source-type"
+                value={newSourceType}
+                onChange={(e) =>
+                  setNewSourceType(e.target.value as KnowledgeSourceType)
+                }
+                className={selectClass}
+                disabled={createSource.isPending}
+              >
+                <option value="vector_collection">
+                  Vector collection (embedded chunks, RAG)
+                </option>
+                <option value="document_collection">
+                  Document collection (typed grouping)
+                </option>
+              </select>
             </div>
           </div>
           <DialogFooter>

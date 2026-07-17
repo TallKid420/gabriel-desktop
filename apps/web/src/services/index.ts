@@ -12,6 +12,7 @@ export * as resources from './resources';
 export * as events from './events';
 export * as notifications from './notifications';
 export * as knowledge from './knowledge';
+export * as tools from './tools';
 export * as organizations from './organizations';
 export * as dashboard from './dashboard';
 export * as search from './search';

@@ -10,6 +10,7 @@ export type WorkspaceId =
   | 'home'
   | 'chat'
   | 'agents'
+  | 'tools'
   | 'documents'
   | 'notifications'
   | 'memory'
