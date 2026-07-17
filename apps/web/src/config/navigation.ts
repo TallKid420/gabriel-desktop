@@ -41,7 +41,7 @@ export const WORKSPACES: WorkspaceDescriptor[] = [
   { id: 'chat', label: 'Conversations', icon: 'chat', href: '/chat', shortcut: 'g c', priority: 'p0', enabled: true },
   { id: 'agents', label: 'Agents', icon: 'agents', href: '/agents', shortcut: 'g a', priority: 'p0', enabled: true },
   { id: 'documents', label: 'Documents', icon: 'documents', href: '/documents', shortcut: 'g d', priority: 'p0', enabled: true },
-  { id: 'notifications', label: 'Notifications', icon: 'notifications', href: '/notifications', shortcut: 'g n', priority: 'p1', enabled: true },
+  { id: 'notifications', label: 'Notifications', icon: 'notifications', href: '/notifications', shortcut: 'g n', priority: 'p1', enabled: false },
   { id: 'memory', label: 'Memory', icon: 'memory', href: '/memory', priority: 'p1', enabled: true },
   { id: 'resources', label: 'Resources', icon: 'resources', href: '/resources', priority: 'p1', enabled: true },
   { id: 'workflows', label: 'Workflows', icon: 'workflows', href: '/workflows', priority: 'p2', enabled: false, badge: 'Soon' },

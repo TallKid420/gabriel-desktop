@@ -9,7 +9,7 @@
     "lint": "pnpm --filter @gabriel/web lint",
     "typecheck": "pnpm --filter @gabriel/web typecheck"
   },
-  "packageManager": "pnpm@11.9.0",
+  "packageManager": "pnpm@11.13.0",
   "engines": {
     "node": ">=20"
   }
