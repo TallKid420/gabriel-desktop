@@ -28,7 +28,7 @@ function mapConversation(dto: ConversationDto): Conversation {
 }
 
 function mapMessage(dto: MessageDto): Message {
-  return {
+  const base: Message = {
     id: dto.grn,
     role: dto.role,
     content: dto.content,
@@ -37,6 +37,21 @@ function mapMessage(dto: MessageDto): Message {
     model: dto.model ?? undefined,
     totalTokens: dto.total_tokens ?? undefined,
   };
+  // Persisted tool-audit rows carry the tool exchange in metadata; render them
+  // as tool-result bubbles so reloading a conversation preserves the activity.
+  if (dto.role === 'tool') {
+    const meta = dto.metadata ?? {};
+    return {
+      ...base,
+      kind: 'tool_result',
+      toolCallId:
+        typeof meta.tool_call_id === 'string' ? meta.tool_call_id : undefined,
+      toolName: typeof meta.tool_name === 'string' ? meta.tool_name : 'tool',
+      toolSuccess: meta.success !== false,
+      toolDenied: meta.denied === true,
+    };
+  }
+  return base;
 }
 
 export async function listConversations(): Promise<Conversation[]> {
@@ -64,9 +79,9 @@ export async function getMessages(conversationGrn: string): Promise<Message[]> {
     `/conversations/${encodeURIComponent(conversationGrn)}/messages`,
     { params: { limit: 200 } },
   );
-  // Tool-audit messages are persisted for traceability but not rendered as
-  // chat bubbles; the tool activity is surfaced live during streaming.
-  return page.items.filter((m) => m.role !== 'tool').map(mapMessage);
+  // Tool-audit messages are persisted for traceability and rendered as
+  // collapsible tool-result bubbles (mirroring the live streaming activity).
+  return page.items.map(mapMessage);
 }
 
 /** Create a new conversation, optionally bound to an agent. */
@@ -156,9 +171,37 @@ export function sendMessage(
             break;
           case 'tool_call':
             handlers.onChunk({ type: 'lifecycle', state: 'delegating' });
+            handlers.onChunk({
+              type: 'tool_call',
+              id: typeof payload.id === 'string' ? payload.id : `tc-${Date.now()}`,
+              name: typeof payload.name === 'string' ? payload.name : 'tool',
+              args: payload.arguments ?? {},
+            });
+            break;
+          case 'tool_approval_required':
+            handlers.onChunk({ type: 'lifecycle', state: 'awaiting_human_approval' });
+            handlers.onChunk({
+              type: 'tool_approval_required',
+              id: typeof payload.id === 'string' ? payload.id : `ta-${Date.now()}`,
+              toolName:
+                typeof payload.tool_name === 'string' ? payload.tool_name : 'tool',
+              args: payload.args ?? {},
+              toolGrn:
+                typeof payload.tool_grn === 'string' ? payload.tool_grn : undefined,
+              sessionId:
+                typeof payload.session_id === 'string' ? payload.session_id : '',
+            });
             break;
           case 'tool_result':
             handlers.onChunk({ type: 'lifecycle', state: 'executing' });
+            handlers.onChunk({
+              type: 'tool_result',
+              id: typeof payload.id === 'string' ? payload.id : `tr-${Date.now()}`,
+              name: typeof payload.name === 'string' ? payload.name : 'tool',
+              success: payload.success !== false,
+              denied: payload.denied === true,
+              content: typeof payload.content === 'string' ? payload.content : '',
+            });
             break;
           case 'error':
             finished = true;
@@ -189,4 +232,27 @@ export function sendMessage(
   );
 
   return dispose;
+}
+
+/**
+ * Resolve a confirmation-gated tool call that paused the stream with a
+ * `tool_approval_required` event. Accepting lets the tool execute; denying
+ * skips it and lets the agent continue with an informative note. The backend
+ * resumes the still-open SSE stream, which then emits the `tool_result`.
+ */
+export async function submitApproval(input: {
+  sessionId: string;
+  toolName: string;
+  approved: boolean;
+  denyReason?: string;
+}): Promise<void> {
+  await gatewayRequest<unknown>('/gateway/chat/approval', {
+    method: 'POST',
+    body: {
+      session_id: input.sessionId,
+      tool_name: input.toolName,
+      approved: input.approved,
+      deny_reason: input.denyReason,
+    },
+  });
 }

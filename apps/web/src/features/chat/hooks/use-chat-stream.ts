@@ -18,6 +18,8 @@ export interface UseChatStream {
   /** Latest agent lifecycle state observed on the stream (ADR-034). */
   lifecycle: AgentLifecycleState | null;
   send: (text: string) => void;
+  /** Accept or deny a paused, confirmation-gated tool call. */
+  respondToApproval: (message: Message, approved: boolean, denyReason?: string) => void;
   loading: boolean;
 }
 
@@ -65,6 +67,16 @@ export function useChatStream({
     return () => disposeRef.current?.();
   }, [conversationId]);
 
+  // Insert a tool-activity bubble just before the streaming assistant reply so
+  // the tool call / result renders above the final answer, in causal order.
+  const insertBeforeStreaming = useCallback((toolMsg: Message) => {
+    setMessages((m) => {
+      const idx = m.findIndex((x) => x.id === streamingIdRef.current);
+      if (idx === -1) return [...m, toolMsg];
+      return [...m.slice(0, idx), toolMsg, ...m.slice(idx)];
+    });
+  }, []);
+
   const send = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -104,6 +116,63 @@ export function useChatStream({
             case 'lifecycle':
               setLifecycle(chunk.state as AgentLifecycleState);
               break;
+            case 'tool_call':
+              insertBeforeStreaming({
+                id: `tc-${chunk.id}`,
+                role: 'tool',
+                kind: 'tool_call',
+                content: '',
+                createdAt: new Date().toISOString(),
+                toolCallId: chunk.id,
+                toolName: chunk.name,
+                toolArgs: chunk.args,
+              });
+              break;
+            case 'tool_approval_required':
+              insertBeforeStreaming({
+                id: `ta-${chunk.id}`,
+                role: 'tool',
+                kind: 'tool_approval',
+                content: '',
+                createdAt: new Date().toISOString(),
+                toolCallId: chunk.id,
+                toolName: chunk.toolName,
+                toolArgs: chunk.args,
+                toolGrn: chunk.toolGrn,
+                approvalSessionId: chunk.sessionId,
+                approvalStatus: 'pending',
+              });
+              break;
+            case 'tool_result':
+              setMessages((m) => {
+                // Flip the matching call bubble from "running" to its outcome.
+                const updated = m.map((msg) =>
+                  msg.kind === 'tool_call' && msg.toolCallId === chunk.id
+                    ? { ...msg, toolSuccess: chunk.success, toolDenied: chunk.denied }
+                    : msg,
+                );
+                const resultMsg: Message = {
+                  id: `tr-${chunk.id}`,
+                  role: 'tool',
+                  kind: 'tool_result',
+                  content: chunk.content,
+                  createdAt: new Date().toISOString(),
+                  toolCallId: chunk.id,
+                  toolName: chunk.name,
+                  toolSuccess: chunk.success,
+                  toolDenied: chunk.denied,
+                };
+                const idx = updated.findIndex(
+                  (x) => x.id === streamingIdRef.current,
+                );
+                if (idx === -1) return [...updated, resultMsg];
+                return [
+                  ...updated.slice(0, idx),
+                  resultMsg,
+                  ...updated.slice(idx),
+                ];
+              });
+              break;
             case 'error':
               setMessages((m) =>
                 m.map((msg) =>
@@ -139,8 +208,42 @@ export function useChatStream({
         },
       });
     },
-    [conversationId, streaming],
+    [conversationId, streaming, insertBeforeStreaming],
   );
 
-  return { messages, streaming, lifecycle, send, loading };
+  const respondToApproval = useCallback(
+    (message: Message, approved: boolean, denyReason?: string) => {
+      if (!message.approvalSessionId || !message.toolName) return;
+      if (message.approvalStatus && message.approvalStatus !== 'pending') return;
+
+      // Optimistically record the decision so the buttons disable immediately.
+      setMessages((m) =>
+        m.map((msg) =>
+          msg.id === message.id
+            ? { ...msg, approvalStatus: approved ? 'accepted' : 'denied' }
+            : msg,
+        ),
+      );
+      if (approved) setLifecycle('resuming');
+
+      chatService
+        .submitApproval({
+          sessionId: message.approvalSessionId,
+          toolName: message.toolName,
+          approved,
+          denyReason,
+        })
+        .catch(() => {
+          // Revert so the user can retry if the decision failed to register.
+          setMessages((m) =>
+            m.map((msg) =>
+              msg.id === message.id ? { ...msg, approvalStatus: 'pending' } : msg,
+            ),
+          );
+        });
+    },
+    [],
+  );
+
+  return { messages, streaming, lifecycle, send, respondToApproval, loading };
 }

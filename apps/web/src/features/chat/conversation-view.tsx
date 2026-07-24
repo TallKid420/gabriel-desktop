@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { useSessionStore } from '@/stores/session-store';
 import { useChatStream } from './hooks/use-chat-stream';
 import { useConversation } from './hooks/use-conversations';
+import { ToolMessage } from './tool-message';
 import type { Message } from '@/types';
 
 /** Human-readable labels for the lifecycle states surfaced while streaming. */
@@ -55,9 +56,10 @@ function MessageBubble({ message }: { message: Message }) {
 
 export function ConversationView({ conversationId }: { conversationId: string }) {
   const { data: conversation } = useConversation(conversationId);
-  const { messages, streaming, lifecycle, send, loading } = useChatStream({
-    conversationId,
-  });
+  const { messages, streaming, lifecycle, send, respondToApproval, loading } =
+    useChatStream({
+      conversationId,
+    });
   const session = useSessionStore((s) => s.session);
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -122,7 +124,9 @@ export function ConversationView({ conversationId }: { conversationId: string })
             <p className="text-center text-sm text-muted-foreground">Loading conversation…</p>
           ) : (
             messages.map((m) =>
-              m.role === 'user' ? (
+              m.kind && m.kind !== 'text' ? (
+                <ToolMessage key={m.id} message={m} onRespond={respondToApproval} />
+              ) : m.role === 'user' ? (
                 <div key={m.id} className="flex flex-row-reverse gap-3">
                   <Avatar className="mt-0.5 size-8 shrink-0">
                     <AvatarFallback className="text-xs">{initials}</AvatarFallback>
